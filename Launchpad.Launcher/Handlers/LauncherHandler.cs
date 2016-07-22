@@ -30,10 +30,11 @@ using System.Threading;
  * and loading the changelog from the server.
  * Since this class starts new threads in which it does the larger computations,
  * there must be no useage of UI code in this class. Keep it clean!
- * 
+ *
  */
 using Launchpad.Launcher.Handlers.Protocols;
 using System.Net;
+using log4net;
 
 namespace Launchpad.Launcher.Handlers
 {
@@ -45,6 +46,11 @@ namespace Launchpad.Launcher.Handlers
 	/// </summary>
 	internal sealed class LauncherHandler
 	{
+		/// <summary>
+		/// Logger instance for this class.
+		/// </summary>
+		private static readonly ILog Log = LogManager.GetLogger(typeof(LauncherHandler));
+
 		public event ChangelogDownloadFinishedEventHandler ChangelogDownloadFinished;
 		public event LauncherDownloadFinishedEventHandler LauncherDownloadFinished;
 		public event LauncherDownloadProgressChangedEventHandler LauncherDownloadProgressChanged;
@@ -55,7 +61,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// The config handler reference.
 		/// </summary>
-		ConfigHandler Config = ConfigHandler.Instance;
+		private static readonly ConfigHandler Config = ConfigHandler.Instance;
 
 		/// <summary>
 		/// Initializes a new instance of the <see cref="Launchpad.Launcher.Handlers.LauncherHandler"/> class.
@@ -72,21 +78,18 @@ namespace Launchpad.Launcher.Handlers
 		{
 			try
 			{
+				Log.Info($"Starting update of lancher files using protocol \"{this.Patch.GetType().Name}\"");
+
 				Patch.ModuleDownloadProgressChanged += OnLauncherDownloadProgressChanged;
 				Patch.ModuleInstallationFinished += OnLauncherDownloadFinished;
 
-				Thread t = new Thread(UpdateLauncher_Implementation);
+				Thread t = new Thread(() => this.Patch.UpdateModule(EModule.Launcher));
 				t.Start();
 			}
 			catch (IOException ioex)
 			{
-				Console.WriteLine("IOException in UpdateLauncher(): " + ioex.Message);
+				Log.Warn("The launcher update failed (IOException): " + ioex.Message);
 			}
-		}
-
-		private void UpdateLauncher_Implementation()
-		{
-			Patch.DownloadLauncher();
 		}
 
 		/// <summary>
@@ -107,7 +110,7 @@ namespace Launchpad.Launcher.Handlers
 			}
 			catch (WebException wex)
 			{
-				Console.WriteLine("WebException in CanAcessStandardChangelog(): " + wex.Message);
+				Log.Warn("Could not access standard changelog (WebException): " + wex.Message);
 				return false;
 			}
 		}
@@ -125,7 +128,7 @@ namespace Launchpad.Launcher.Handlers
 		{
 			if (Patch.CanProvideChangelog())
 			{
-				ChangelogDownloadFinishedArgs.HTML = Patch.GetChangelog();
+				ChangelogDownloadFinishedArgs.HTML = Patch.GetChangelogSource();
 				ChangelogDownloadFinishedArgs.URL = Config.GetChangelogURL();
 			}
 
@@ -140,90 +143,92 @@ namespace Launchpad.Launcher.Handlers
 		{
 			try
 			{
-				//maintain the executable name if it was renamed to something other than 'Launchpad' 
-				string assemblyPath = Assembly.GetEntryAssembly().Location;
-				string executableName = Path.GetFileName(assemblyPath);
+				string updateScriptPath = GetUpdateScriptPath();
+				string updateScriptSource = GetUpdateScriptSource();
 
-				if (ChecksHandler.IsRunningOnUnix())
+				File.WriteAllText(updateScriptPath, updateScriptSource);
+
+				ProcessStartInfo updateShellProcess = new ProcessStartInfo
 				{
-					//creating a .sh script
-					string scriptPath = String.Format(@"{0}launchpadupdate.sh", 
-						                    Path.GetTempPath());
+					FileName = updateScriptPath,
+					UseShellExecute = false,
+					RedirectStandardOutput = false,
+					WindowStyle = ProcessWindowStyle.Hidden
+				};
 
-
-					using (FileStream updateScript = File.Create(scriptPath))
-					{
-						using (TextWriter tw = new StreamWriter(updateScript))
-						{							
-							string copyCom = String.Format("cp -rf {0} {1}", 
-								                 Path.GetTempPath() + "launchpad/launcher/*",
-								                 ConfigHandler.GetLocalDir());
-
-							string delCom = String.Format("rm -rf {0}", 
-								                Path.GetTempPath() + "launchpad");
-
-							string dirCom = String.Format("cd {0}", ConfigHandler.GetLocalDir());
-							string launchCom = String.Format(@"nohup ./{0} &", executableName);
-							tw.WriteLine(@"#!/bin/sh");
-							tw.WriteLine("sleep 5");
-							tw.WriteLine(copyCom);
-							tw.WriteLine(delCom); 
-							tw.WriteLine(dirCom);
-							tw.WriteLine("chmod +x " + executableName);
-							tw.WriteLine(launchCom);
-						}
-					}
-
-					UnixHandler.MakeExecutable(scriptPath);
-
-
-					//Now create some ProcessStartInfo for this script
-					ProcessStartInfo updateShellProcess = new ProcessStartInfo();
-									
-					updateShellProcess.FileName = scriptPath;
-					updateShellProcess.UseShellExecute = false;
-					updateShellProcess.RedirectStandardOutput = false;
-					updateShellProcess.WindowStyle = ProcessWindowStyle.Hidden;
-
-					return updateShellProcess;
-				}
-				else
-				{
-					//creating a .bat script
-					string scriptPath = String.Format(@"{0}launchpadupdate.bat", 
-						                    Path.GetTempPath());
-
-					using (FileStream updateScript = File.Create(scriptPath))
-					{
-						using (TextWriter tw = new StreamWriter(updateScript))
-						{
-							//write commands to the script
-							//wait three seconds, then copy the new executable
-							tw.WriteLine(String.Format(@"timeout 3 & xcopy /e /s /y ""{0}\launchpad\launcher"" ""{1}"" && rmdir /s /q {0}\launchpad", 
-									Path.GetTempPath(), 
-									ConfigHandler.GetLocalDir()));
-
-							//then start the new executable
-							tw.WriteLine(String.Format(@"start {0}", executableName));
-							tw.Close();
-						}
-					}
-
-					ProcessStartInfo updateBatchProcess = new ProcessStartInfo();
-
-					updateBatchProcess.FileName = scriptPath;
-					updateBatchProcess.UseShellExecute = true;
-					updateBatchProcess.RedirectStandardOutput = false;
-					updateBatchProcess.WindowStyle = ProcessWindowStyle.Hidden;
-
-					return updateBatchProcess;
-				}
+				return updateShellProcess;
 			}
 			catch (IOException ioex)
 			{
-				Console.WriteLine("IOException in CreateUpdateScript(): " + ioex.Message);
+				Log.Warn("Failed to create update script (IOException): " + ioex.Message);
 
 				return null;
+			}
+		}
+
+		/// <summary>
+		/// Extracts the bundled update script and populates the variables in it
+		/// with the data needed for the update procedure.
+		/// </summary>
+		private static string GetUpdateScriptSource()
+		{
+			// Load the script from the embedded resources
+			Assembly localAssembly = Assembly.GetExecutingAssembly();
+
+			string scriptSource = "";
+			string resourceName = GetUpdateScriptResourceName();
+			using (Stream resourceStream = localAssembly.GetManifestResourceStream(resourceName))
+			{
+				if (resourceStream != null)
+				{
+					using (StreamReader reader = new StreamReader(resourceStream))
+					{
+						scriptSource = reader.ReadToEnd();
+					}
+				}
+			}
+
+			// Replace the variables in the script with actual data
+			const string TempDirectoryVariable = "%temp%";
+			const string LocalInstallDirectoryVariable = "%localDir%";
+			const string LocalExecutableName = "%launchpadExecutable%";
+
+			string transientScriptSource = scriptSource;
+
+			transientScriptSource = transientScriptSource.Replace(TempDirectoryVariable, Path.GetTempPath());
+			transientScriptSource = transientScriptSource.Replace(LocalInstallDirectoryVariable, ConfigHandler.GetLocalDir());
+			transientScriptSource = transientScriptSource.Replace(LocalExecutableName, Path.GetFileName(localAssembly.Location));
+
+			return transientScriptSource;
+		}
+
+		/// <summary>
+		/// Gets the name of the embedded update script.
+		/// </summary>
+		private static string GetUpdateScriptResourceName()
+		{
+			if (ChecksHandler.IsRunningOnUnix())
+			{
+				return "Launchpad.Launcher.Resources.launchpad_update.sh";
+			}
+			else
+			{
+				 return "Launchpad.Launcher.Resources.launchpad_update.bat";
+			}
+		}
+
+		/// <summary>
+		/// Gets the name of the embedded update script.
+		/// </summary>
+		private static string GetUpdateScriptPath()
+		{
+			if (ChecksHandler.IsRunningOnUnix())
+			{
+				return $@"{Path.GetTempPath()}launchpad_update.sh";
+			}
+			else
+			{
+				 return $@"{Path.GetTempPath()}launchpad_update.bat";
 			}
 		}
 
@@ -235,7 +240,6 @@ namespace Launchpad.Launcher.Handlers
 		{
 			if (ChangelogDownloadFinished != null)
 			{
-				//raise the event
 				ChangelogDownloadFinished(this, ChangelogDownloadFinishedArgs);
 			}
 		}
@@ -270,7 +274,7 @@ namespace Launchpad.Launcher.Handlers
 	public class ChangelogDownloadFinishedEventArgs : EventArgs
 	{
 		public string HTML
-		{ 
+		{
 			get;
 			set;
 		}

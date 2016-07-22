@@ -20,26 +20,35 @@
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 using System;
+using System.IO;
+using System.Linq;
 using Gtk;
-
+using Launchpad.Utilities.Handlers;
 using Launchpad.Utilities.Utility.Events;
 using NGettext;
-using Launchpad.Utilities.Handlers;
 
-namespace Launchpad.Utilities.UnixUI
+namespace Launchpad.Utilities.Interface
 {
 	[CLSCompliant(false)]
-	public partial class MainWindow : Gtk.Window
+	public partial class MainWindow : Window
 	{
+		/// <summary>
+		/// The manifest generation handler.
+		/// </summary>
+		private readonly ManifestHandler Manifest = new ManifestHandler();
+
 		/// <summary>
 		/// The localization catalog.
 		/// </summary>
 		private readonly ICatalog LocalizationCatalog = new Catalog("Launchpad", "./locale");
 
 		public MainWindow()
-			: base(Gtk.WindowType.Toplevel)
+			: base(WindowType.Toplevel)
 		{
-			this.Build();
+			Build();
+
+			Manifest.ManifestGenerationProgressChanged += OnGenerateManifestProgressChanged;
+			Manifest.ManifestGenerationFinished += OnGenerateManifestFinished;
 
 			fileChooser.SetCurrentFolder(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
 			fileChooser.SelectMultiple = false;
@@ -52,40 +61,54 @@ namespace Launchpad.Utilities.UnixUI
 		/// </summary>
 		/// <param name="sender">Sender.</param>
 		/// <param name="a">The alpha component.</param>
-		protected void OnDeleteEvent(object sender, DeleteEventArgs a)
+		private static void OnDeleteEvent(object sender, DeleteEventArgs a)
 		{
 			Application.Quit();
 			a.RetVal = true;
 		}
 
-		protected void OnGenerateGameManifestButtonClicked(object sender, EventArgs e)
+		private void OnGenerateGameManifestButtonClicked(object sender, EventArgs e)
 		{
 			generateGameManifestButton.Sensitive = false;
 			generateLaunchpadManifestButton.Sensitive = false;
 
-			string TargetDirectory = fileChooser.Filename;
+			string targetDirectory = fileChooser.Filename;
 
-			ManifestHandler Manifest = new ManifestHandler();
+			if (!Directory.GetFiles(targetDirectory).Any(s => s.Contains("GameVersion.txt")))
+			{
+				MessageDialog dialog = new MessageDialog(this,
+					DialogFlags.Modal,
+					MessageType.Question,
+					ButtonsType.YesNo,
+					LocalizationCatalog.GetString("No GameVersion.txt file could be found in the target directory. This file is required.\n" +
+												  "Would you like to add one? The version will be \"1.0.0\"."));
 
-			Manifest.ManifestGenerationProgressChanged += OnGenerateManifestProgressChanged;
-			Manifest.ManifestGenerationFinished += OnGenerateManifestFinished;
+				if (dialog.Run() == (int) ResponseType.Yes)
+				{
+					string gameVersionPath = $"{targetDirectory}{System.IO.Path.DirectorySeparatorChar}GameVersion.txt";
+					File.WriteAllText(gameVersionPath, new Version("1.0.0").ToString());
 
-			Manifest.GenerateManifest(TargetDirectory, EManifestType.Game);
+					dialog.Destroy();
+				}
+				else
+				{
+					dialog.Destroy();
+					return;
+				}
+			}
+
+			Manifest.GenerateManifest(targetDirectory, EManifestType.Game);
 		}
 
-		protected void OnGenerateLaunchpadManifestButtonClicked(object sender, EventArgs e)
+		private void OnGenerateLaunchpadManifestButtonClicked(object sender, EventArgs e)
 		{
 			generateGameManifestButton.Sensitive = false;
 			generateLaunchpadManifestButton.Sensitive = false;
 
-			string TargetDirectory = fileChooser.Filename;
+			string targetDirectory = fileChooser.Filename;
 
-			ManifestHandler Manifest = new ManifestHandler();
+			Manifest.GenerateManifest(targetDirectory, EManifestType.Launchpad);
 
-			Manifest.ManifestGenerationProgressChanged += OnGenerateManifestProgressChanged;
-			Manifest.ManifestGenerationFinished += OnGenerateManifestFinished;
-
-			Manifest.GenerateManifest(TargetDirectory, EManifestType.Launchpad);
 		}
 
 		/// <summary>
@@ -93,14 +116,14 @@ namespace Launchpad.Utilities.UnixUI
 		/// </summary>
 		/// <param name="sender">Sender.</param>
 		/// <param name="e">Arguments containing information about the entered file.</param>
-		protected void OnGenerateManifestProgressChanged(object sender, ManifestGenerationProgressChangedEventArgs e)
+		private void OnGenerateManifestProgressChanged(object sender, ManifestGenerationProgressChangedEventArgs e)
 		{
 			Application.Invoke(delegate
 				{
 					string progressString = LocalizationCatalog.GetString("{0} : {1} out of {2}");
-					progressLabel.Text = String.Format(progressString, e.Filepath, e.CompletedFiles, e.TotalFiles);
+					progressLabel.Text = string.Format(progressString, e.Filepath, e.CompletedFiles, e.TotalFiles);
 
-					progressbar.Fraction = (double)e.CompletedFiles / (double)e.TotalFiles;
+					progressbar.Fraction = e.CompletedFiles / (double)e.TotalFiles;
 				});
 		}
 
@@ -109,7 +132,7 @@ namespace Launchpad.Utilities.UnixUI
 		/// </summary>
 		/// <param name="sender">Sender.</param>
 		/// <param name="e">Empty arguments</param>
-		protected void OnGenerateManifestFinished(object sender, EventArgs e)
+		private void OnGenerateManifestFinished(object sender, EventArgs e)
 		{
 			Application.Invoke(delegate
 				{

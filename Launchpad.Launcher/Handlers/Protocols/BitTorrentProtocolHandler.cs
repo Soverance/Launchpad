@@ -22,6 +22,7 @@
 // TODO: Look into MonoTorrent
 using Launchpad.Launcher.Utility.Enums;
 using System;
+using System.Drawing;
 
 
 namespace Launchpad.Launcher.Handlers.Protocols
@@ -29,22 +30,17 @@ namespace Launchpad.Launcher.Handlers.Protocols
 	/// <summary>
 	/// Bit torrent protocol handler. Downloads and patches the game
 	/// and launcher using a P2P BitTorrent protocol.
-	/// 
+	///
 	/// This protocol does not use a manifest.
 	/// </summary>
 	internal sealed class BitTorrentProtocolHandler : PatchProtocolHandler
 	{
-		public BitTorrentProtocolHandler()
-			: base()
-		{
-		}
-
 		public override bool CanPatch()
 		{
 			return false;
 		}
 
-		public override bool IsPlatformAvailable(ESystemTarget Platform)
+		public override bool IsPlatformAvailable(ESystemTarget platform)
 		{
 			return false;
 		}
@@ -54,49 +50,44 @@ namespace Launchpad.Launcher.Handlers.Protocols
 			return false;
 		}
 
-		public override string GetChangelog()
+		public override string GetChangelogSource()
 		{
-			return String.Empty;
+			return string.Empty;
 		}
 
-		public override bool IsLauncherOutdated()
+		public override bool CanProvideBanner()
 		{
 			return false;
 		}
 
-		public override bool IsGameOutdated()
+		public override Bitmap GetBanner()
 		{
-			return false;
+			return null;
+		}
+
+		public override bool IsModuleOutdated(EModule module)
+		{
+			throw new NotImplementedException();
 		}
 
 		public override void InstallGame()
 		{
-
+			throw new NotImplementedException();
 		}
 
-		public override void DownloadLauncher()
+		protected override void DownloadModule(EModule module)
 		{
-
+			throw new NotImplementedException();
 		}
 
-		protected override void DownloadGame()
+		public override void UpdateModule(EModule module)
 		{
-
+			throw new NotImplementedException();
 		}
 
-		public override void VerifyLauncher()
+		public override void VerifyModule(EModule module)
 		{
-
-		}
-
-		public override void VerifyGame()
-		{
-
-		}
-
-		public override void UpdateGame()
-		{
-
+			throw new NotImplementedException();
 		}
 	}
 }

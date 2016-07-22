@@ -1,7 +1,8 @@
 Launchpad
 =========
 
-An UE4-compatible game launcher
+An open-souce launcher for your games.
+Launchpad was originally made for Unreal Engine 4, but supports arbitrary software and games. 
 
 [![Build Status](https://travis-ci.org/Nihlus/Launchpad.svg?branch=master)](https://travis-ci.org/Nihlus/Launchpad)
 
@@ -11,15 +12,14 @@ Features:
 
 * Self-updating
 * Can install, update and verify the game installation
-* Basic design (I am not an artist)
+* Support for a number of widespread protocols (currently FTP and HTTP/HTTPS)
 
-Usage guide: https://forums.unrealengine.com/showthread.php?29904-Launchpad-A-free-open-source-UE4-compatible-game-launcher
+Usage guide: [Launchpad Quickstart]
 
 Note for users installing on Unix - you may need to install some additional libraries for Launchpad to run.
 Simply run /Scripts/launchpad-dependencies.sh if your system is Debian or Debian-based, and it'll install them for you.
 
 If you are not on a Debian-based system, you have to install these packages:
-* libnotify-cil-dev
 * libwebkitgtk-dev
 
 If you are on Windows, you'll also need the GTK# runtime.

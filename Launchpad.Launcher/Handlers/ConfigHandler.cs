@@ -23,46 +23,103 @@ using IniParser;
 using IniParser.Model;
 using System;
 using System.IO;
+using System.Reflection;
 using Launchpad.Launcher.Utility.Enums;
 using Launchpad.Launcher.Utility;
 using Launchpad.Launcher.Handlers.Protocols;
 using System.Security.Cryptography;
 using System.Text;
+using log4net;
 
 namespace Launchpad.Launcher.Handlers
 {
 	/// <summary>
 	/// Config handler. This class handles reading and writing to the launcher's configuration.
 	/// Read and write operations are synchronized by locks, so it should be threadsafe.
-	/// This is a singleton class, and it should always be accessed through _Instance.
+	/// This is a singleton class, and it should always be accessed through <see cref="Instance"/>.
 	/// </summary>
 	public sealed class ConfigHandler
 	{
 		/// <summary>
+		/// Logger instance for this class.
+		/// </summary>
+		private static readonly ILog Log = LogManager.GetLogger(typeof(ConfigHandler));
+
+		/// <summary>
 		/// The config lock object.
 		/// </summary>
-		private object ReadLock = new Object();
+		private readonly object ReadLock = new object();
 		/// <summary>
 		/// The write lock object.
 		/// </summary>
-		private object WriteLock = new Object();
+		private readonly object WriteLock = new object();
+
+
+		/*
+			Constants for different default configuration options. Changing one option here should be reflected with
+			a corresponding update block in the initialization.
+		*/
+
+		private const string DefaultGameName = "LaunchpadExample";
+		private const string DefaultChangelogURL = "http://directorate.asuscomm.com/launchpad/changelog/changelog.html";
+		private const string DefaultProtocol = "FTP";
+		private const string DefaultFileRetries = "2";
+		private const string DefaultUsername = "anonymous";
+		private const string DefaultPassword = "anonymous";
+		private const string DefaultFTPAddress = "ftp://directorate.asuscomm.com";
+		private const string DefaultHTTPAddress = "http://directorate.asuscomm.com/launchpad";
+		private const string DefaultUseOfficialUpdates = "true";
+		private const string DefaultAllowAnonymousStatus = "true";
+
+		private const string ConfigurationFolderName = "Config";
+		private const string ConfigurationFileName = "LauncherConfig";
+
+		private const string SectionNameLocal = "Local";
+		private const string SectionNameRemote = "Remote";
+		private const string SectionNameFTP = "FTP";
+		private const string SectionNameHTTP = "HTTP";
+		private const string SectionNameBitTorrent = "BitTorrent";
+		private const string SectionNameLaunchpad = "Launchpad";
+
+		private const string LocalVersionKey = "LauncherVersion";
+		private const string LocalGameNameKey = "GameName";
+		private const string LocalSystemTargetKey = "SystemTarget";
+		private const string LocalGameGUIDKey = "GUID";
+		private const string LocalMainExecutableNameKey = "MainExecutableName";
+
+		private const string RemoteChangelogURLKey = "ChangelogURL";
+		private const string RemoteProtocolKey = "Protocol";
+		private const string RemoteFileRetriesKey = "FileRetries";
+		private const string RemoteUsernameKey = "Username";
+		private const string RemotePasswordKey = "Password";
+
+		private const string FTPAddressKey = "URL";
+		private const string HTTPAddressKey = "URL";
+
+		private const string LaunchpadOfficialUpdatesKey = "bOfficialUpdates";
+		private const string LaunchpadAnonymousStatsKey = "bAllowAnonymousStats";
 
 		/// <summary>
 		/// The singleton Instance. Will always point to one shared object.
 		/// </summary>
 		public static readonly ConfigHandler Instance = new ConfigHandler();
 
+		private ConfigHandler()
+		{
+			Initialize();
+		}
+
 		/// <summary>
-		/// Writes the config data to disk. This method is thread-blocking, and all write operations 
-		/// are synchronized via lock(WriteLock).
+		/// Writes the config data to disk. This method is thread-blocking, and all write operations
+		/// are synchronized via lock(<see cref="WriteLock"/>).
 		/// </summary>
-		/// <param name="Parser">The parser dealing with the current data.</param>
-		/// <param name="Data">The data which should be written to file.</param>
-		private void WriteConfig(FileIniDataParser Parser, IniData Data)
+		/// <param name="parser">The parser dealing with the current data.</param>
+		/// <param name="data">The data which should be written to file.</param>
+		private void WriteConfig(FileIniDataParser parser, IniData data)
 		{
 			lock (WriteLock)
 			{
-				Parser.WriteFile(GetConfigPath(), Data);
+				parser.WriteFile(GetConfigPath(), data);
 			}
 		}
 
@@ -72,9 +129,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns>The config path.</returns>
 		private static string GetConfigPath()
 		{
-			string configPath = String.Format(@"{0}LauncherConfig.ini", 
-				                    GetConfigDir());
-            
+			string configPath = $@"{GetConfigDir()}{ConfigurationFileName}.ini";
+
 			return configPath;
 		}
 
@@ -84,20 +140,18 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns>The config dir, terminated with a directory separator.</returns>
 		private static string GetConfigDir()
 		{
-			string configDir = String.Format(@"{0}Config{1}", 
-				                   GetLocalDir(),
-				                   Path.DirectorySeparatorChar);
+			string configDir = $@"{GetLocalDir()}{ConfigurationFolderName}{Path.DirectorySeparatorChar}";
 			return configDir;
 		}
 
 		/// <summary>
-		/// Initializes the config by checking for bad values or files. 
+		/// Initializes the config by checking for bad values or files.
 		/// Run once when the launcher starts, then avoid unless absolutely neccesary.
 		/// </summary>
-		public void Initialize()
+		private void Initialize()
 		{
 			//Since Initialize will write to the config, we'll create the parser here and load the file later
-			FileIniDataParser Parser = new FileIniDataParser();
+			FileIniDataParser parser = new FileIniDataParser();
 
 			string configDir = GetConfigDir();
 			string configPath = GetConfigPath();
@@ -123,156 +177,164 @@ namespace Launchpad.Launcher.Handlers
 					//here we create a new empty file
 					FileStream configStream = File.Create(configPath);
 					configStream.Close();
-                     
+
 					//read the file as an INI file
 					try
 					{
-						IniData data = Parser.ReadFile(GetConfigPath());
+						IniData data = parser.ReadFile(GetConfigPath());
 
-						data.Sections.AddSection("Local");
-						data.Sections.AddSection("Remote");
-						data.Sections.AddSection("FTP");
-						data.Sections.AddSection("HTTP");
-						data.Sections.AddSection("BitTorrent");
-						data.Sections.AddSection("Launchpad");
+						data.Sections.AddSection(SectionNameLocal);
+						data.Sections.AddSection(SectionNameRemote);
+						data.Sections.AddSection(SectionNameFTP);
+						data.Sections.AddSection(SectionNameHTTP);
+						data.Sections.AddSection(SectionNameBitTorrent);
+						data.Sections.AddSection(SectionNameLaunchpad);
 
-						data["Local"].AddKey("LauncherVersion", defaultLauncherVersion.ToString());
-						data["Local"].AddKey("GameName", "LaunchpadExample");
-						data["Local"].AddKey("SystemTarget", GetCurrentPlatform().ToString());
-						data["Local"].AddKey("GUID", GenerateSeededGUID("LaunchpadExample"));					
+						data[SectionNameLocal].AddKey(LocalVersionKey, defaultLauncherVersion.ToString());
+						data[SectionNameLocal].AddKey(LocalGameNameKey, DefaultGameName);
+						data[SectionNameLocal].AddKey(LocalSystemTargetKey, GetCurrentPlatform().ToString());
+						data[SectionNameLocal].AddKey(LocalGameGUIDKey, GenerateSeededGUID(DefaultGameName));
+						data[SectionNameLocal].AddKey(LocalMainExecutableNameKey, DefaultGameName);
 
-						data["Remote"].AddKey("ChangelogURL", "http://directorate.asuscomm.com/launchpad/changelog/changelog.html");
-						data["Remote"].AddKey("Protocol", "FTP");
-						data["Remote"].AddKey("FileRetries", "2");
-						data["Remote"].AddKey("Username", "anonymous");
-						data["Remote"].AddKey("Password", "anonymous");
+						data[SectionNameRemote].AddKey(RemoteChangelogURLKey, DefaultChangelogURL);
+						data[SectionNameRemote].AddKey(RemoteProtocolKey, DefaultProtocol);
+						data[SectionNameRemote].AddKey(RemoteFileRetriesKey, DefaultFileRetries);
+						data[SectionNameRemote].AddKey(RemoteUsernameKey, DefaultUsername);
+						data[SectionNameRemote].AddKey(RemotePasswordKey, DefaultPassword);
 
-						data["FTP"].AddKey("URL", "ftp://directorate.asuscomm.com");
+						data[SectionNameFTP].AddKey(FTPAddressKey, DefaultFTPAddress);
 
-						data["HTTP"].AddKey("URL", "http://directorate.asuscomm.com/launchpad");
+						data[SectionNameHTTP].AddKey(HTTPAddressKey, DefaultHTTPAddress);
 
-						data["BitTorrent"].AddKey("Magnet", "");
+						data[SectionNameBitTorrent].AddKey("Magnet", "");
 
-						data["Launchpad"].AddKey("bOfficialUpdates", "true");
-						data["Launchpad"].AddKey("bAllowAnonymousStats", "true");
+						data[SectionNameLaunchpad].AddKey(LaunchpadOfficialUpdatesKey, DefaultUseOfficialUpdates);
+						data[SectionNameLaunchpad].AddKey(LaunchpadAnonymousStatsKey, DefaultAllowAnonymousStatus);
 
-						WriteConfig(Parser, data);
+						WriteConfig(parser, data);
 					}
 					catch (IOException ioex)
 					{
-						Console.WriteLine("IOException in ConfigHandler.Initialize(): " + ioex.Message);
+						Log.Warn("Failed to create configuration file (IOException): " + ioex.Message);
 					}
 
 				}
 				else
 				{
 					/*
-						This section is for updating old configuration files 
+						This section is for updating old configuration files
 						with new sections introduced in updates.
 
 						It's good practice to wrap each updating section in a
 						small informational header with the date and change.
 					*/
 
-					IniData data = Parser.ReadFile(GetConfigPath());
+					IniData data = parser.ReadFile(GetConfigPath());
 
 					// Update the user-visible version of the launcher
-					data["Local"]["LauncherVersion"] = defaultLauncherVersion.ToString();
+					data[SectionNameLocal][LocalVersionKey] = defaultLauncherVersion.ToString();
 
 					// ...
 
 					// March 22 - 2016: Changed GUID generation to create a unique GUID for each game name
 					// Update config files without GUID keys
-					string seededGUID = GenerateSeededGUID(data["Local"].GetKeyData("GameName").Value);
-					if (!data["Local"].ContainsKey("GUID"))
+					string seededGUID = GenerateSeededGUID(data[SectionNameLocal].GetKeyData(LocalGameNameKey).Value);
+					if (!data[SectionNameLocal].ContainsKey(LocalGameGUIDKey))
 					{
-						data["Local"].AddKey("GUID", seededGUID);
+						data[SectionNameLocal].AddKey(LocalGameGUIDKey, seededGUID);
 					}
 					else
 					{
 						// Update the game GUID
-						data["Local"]["GUID"] = seededGUID;
+						data[SectionNameLocal][LocalGameGUIDKey] = seededGUID;
 					}
 					// End March 22 - 2016
 
 					// Update config files without protocol keys
-					if (!data["Remote"].ContainsKey("Protocol"))
+					if (!data[SectionNameRemote].ContainsKey(RemoteProtocolKey))
 					{
-						data["Remote"].AddKey("Protocol", "FTP");
+						data[SectionNameRemote].AddKey(RemoteProtocolKey, DefaultProtocol);
 					}
 
 					// Update config files without changelog keys
-					if (!data["Remote"].ContainsKey("ChangelogURL"))
+					if (!data[SectionNameRemote].ContainsKey(RemoteChangelogURLKey))
 					{
-						data["Remote"].AddKey("ChangelogURL", "http://directorate.asuscomm.com/launchpad/changelog/changelog.html");
+						data[SectionNameRemote].AddKey(RemoteChangelogURLKey, DefaultChangelogURL);
 					}
 
 					// March 21 - 2016: Moves FTP url to its own section
 					// March 21 - 2016: Renames FTP credential keys
 					// March 21 - 2016: Adds sections for FTP, HTTP and BitTorrent.
 					// March 21 - 2016: Adds configuration option for number of times to retry broken files
-					if (data["Remote"].ContainsKey("FTPUsername"))
+					if (data[SectionNameRemote].ContainsKey("FTPUsername"))
 					{
-						string username = data["Remote"].GetKeyData("FTPUsername").Value;
-						data["Remote"].RemoveKey("FTPUsername");
+						string username = data[SectionNameRemote].GetKeyData("FTPUsername").Value;
+						data[SectionNameRemote].RemoveKey("FTPUsername");
 
-						data["Remote"].AddKey("Username", username);
+						data[SectionNameRemote].AddKey(RemoteUsernameKey, username);
 
 					}
-					if (data["Remote"].ContainsKey("FTPPassword"))
+					if (data[SectionNameRemote].ContainsKey("FTPPassword"))
 					{
-						string password = data["Remote"].GetKeyData("FTPPassword").Value;
-						data["Remote"].RemoveKey("FTPPassword");
+						string password = data[SectionNameRemote].GetKeyData("FTPPassword").Value;
+						data[SectionNameRemote].RemoveKey("FTPPassword");
 
-						data["Remote"].AddKey("Password", password);
+						data[SectionNameRemote].AddKey(RemotePasswordKey, password);
 					}
 
-					if (!data.Sections.ContainsSection("FTP"))
+					if (!data.Sections.ContainsSection(SectionNameFTP))
 					{
-						data.Sections.AddSection("FTP");
+						data.Sections.AddSection(SectionNameFTP);
 					}
 
-					if (data["Remote"].ContainsKey("FTPUrl"))
+					if (data[SectionNameRemote].ContainsKey("FTPUrl"))
 					{
-						string ftpurl = data["Remote"].GetKeyData("FTPUrl").Value;
-						data["Remote"].RemoveKey("FTPUrl");
+						string ftpurl = data[SectionNameRemote].GetKeyData("FTPUrl").Value;
+						data[SectionNameRemote].RemoveKey("FTPUrl");
 
-						data["FTP"].AddKey("URL", ftpurl);
+						data[SectionNameFTP].AddKey(FTPAddressKey, ftpurl);
 					}
 
-					if (!data.Sections.ContainsSection("HTTP"))
+					if (!data.Sections.ContainsSection(SectionNameHTTP))
 					{
-						data.Sections.AddSection("HTTP");
+						data.Sections.AddSection(SectionNameHTTP);
 					}
 
-					if (!data["HTTP"].ContainsKey("URL"))
+					if (!data[SectionNameHTTP].ContainsKey(HTTPAddressKey))
 					{
-						data["HTTP"].AddKey("URL", "http://directorate.asuscomm.com/launchpad");
+						data[SectionNameHTTP].AddKey(HTTPAddressKey, "http://directorate.asuscomm.com/launchpad");
 					}
 
-					if (!data.Sections.ContainsSection("BitTorrent"))
+					if (!data.Sections.ContainsSection(SectionNameBitTorrent))
 					{
-						data.Sections.AddSection("BitTorrent");
+						data.Sections.AddSection(SectionNameBitTorrent);
 					}
 
-					if (!data["BitTorrent"].ContainsKey("Magnet"))
+					if (!data[SectionNameBitTorrent].ContainsKey("Magnet"))
 					{
-						data["BitTorrent"].AddKey("Magnet", "");
+						data[SectionNameBitTorrent].AddKey("Magnet", "");
 					}
 
-					if (!data["Launchpad"].ContainsKey("bAllowAnonymousStats"))
+					if (!data[SectionNameLaunchpad].ContainsKey("bAllowAnonymousStats"))
 					{
-						data["Launchpad"].AddKey("bAllowAnonymousStats", "true");
+						data[SectionNameLaunchpad].AddKey("bAllowAnonymousStats", "true");
 					}
 
-					if (!data["Remote"].ContainsKey("FileRetries"))
+					if (!data[SectionNameRemote].ContainsKey(RemoteFileRetriesKey))
 					{
-						data["Remote"].AddKey("FileRetries", "2");
+						data[SectionNameRemote].AddKey(RemoteFileRetriesKey, "2");
 					}
 					// End March 21 - 2016
 
+					// June 2 - 2016: Adds main executable redirection option
+					if (!data[SectionNameLocal].ContainsKey("MainExecutuableName"))
+					{
+						string gameName = data[SectionNameLocal][LocalGameNameKey];
+						data[SectionNameLocal].AddKey(LocalMainExecutableNameKey, gameName);
+					}
+
 					// ...
-					WriteConfig(Parser, data);
+					WriteConfig(parser, data);
 				}
 			}
 
@@ -280,12 +342,20 @@ namespace Launchpad.Launcher.Handlers
 			if (!File.Exists(GetInstallGUIDPath()))
 			{
 				// Make sure all the folders needed exist.
-				string GUIDDirectoryPath = Path.GetDirectoryName(GetInstallGUIDPath());
-				Directory.CreateDirectory(GUIDDirectoryPath);
+				string installGUIDDirectoryPath = Path.GetDirectoryName(GetInstallGUIDPath());
+				if (string.IsNullOrEmpty(installGUIDDirectoryPath))
+				{
+					Log.Error("Could not get a valid path for the creation of the install GUID folder.\n" +
+					          "This is most likely due to a fault in the operating system.");
+				}
+				else
+				{
+					Directory.CreateDirectory(installGUIDDirectoryPath);
+				}
 
 				// Generate and store a GUID.
-				string GeneratedGUID = Guid.NewGuid().ToString();
-				File.WriteAllText(GetInstallGUIDPath(), GeneratedGUID);
+				string generatedInstallGUID = Guid.NewGuid().ToString();
+				File.WriteAllText(GetInstallGUIDPath(), generatedInstallGUID);
 			}
 			else
 			{
@@ -294,8 +364,8 @@ namespace Launchpad.Launcher.Handlers
 				if (guidInfo.Length <= 0)
 				{
 					// Generate and store a GUID.
-					string GeneratedGUID = Guid.NewGuid().ToString();
-					File.WriteAllText(GetInstallGUIDPath(), GeneratedGUID);
+					string generatedInstallGUID = Guid.NewGuid().ToString();
+					File.WriteAllText(GetInstallGUIDPath(), generatedInstallGUID);
 				}
 			}
 		}
@@ -304,12 +374,12 @@ namespace Launchpad.Launcher.Handlers
 		/// Generates a type-3 deterministic GUID for a specified seed string.
 		/// The GUID is not designed to be cryptographically secure, nor is it
 		/// designed for any use beyond simple generation of a GUID unique to a
-		/// single game. If you use it for anything else, your code is bad and 
+		/// single game. If you use it for anything else, your code is bad and
 		/// you should feel bad.
 		/// </summary>
 		/// <returns>The seeded GUI.</returns>
 		/// <param name="seed">Seed.</param>
-		public static string GenerateSeededGUID(string seed)
+		private static string GenerateSeededGUID(string seed)
 		{
 			using (MD5 md5 = MD5.Create())
 			{
@@ -324,8 +394,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns>The update cookie.</returns>
 		public static string GetUpdateCookiePath()
 		{
-			string updateCookie = String.Format(@"{0}.update", 
-				                      GetLocalDir());
+			string updateCookie = $@"{GetLocalDir()}.update";
 			return updateCookie;
 		}
 
@@ -333,18 +402,12 @@ namespace Launchpad.Launcher.Handlers
 		/// Creates the update cookie.
 		/// </summary>
 		/// <returns>The update cookie's path.</returns>
-		public static string CreateUpdateCookie()
+		public static void CreateUpdateCookie()
 		{
 			bool bCookieExists = File.Exists(GetUpdateCookiePath());
 			if (!bCookieExists)
 			{
 				File.Create(GetUpdateCookiePath());
-
-				return GetUpdateCookiePath();
-			}
-			else
-			{
-				return GetUpdateCookiePath();
 			}
 		}
 
@@ -354,8 +417,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns>The install cookie.</returns>
 		public static string GetInstallCookiePath()
 		{
-			string installCookie = String.Format(@"{0}.install", 
-				                       GetLocalDir());
+			string installCookie = $@"{GetLocalDir()}.install";
 			return installCookie;
 		}
 
@@ -363,19 +425,13 @@ namespace Launchpad.Launcher.Handlers
 		/// Creates the install cookie.
 		/// </summary>
 		/// <returns>The install cookie's path.</returns>
-		public static string CreateInstallCookie()
+		public static void CreateInstallCookie()
 		{
 			bool bCookieExists = File.Exists(GetInstallCookiePath());
 
 			if (!bCookieExists)
 			{
 				File.Create(GetInstallCookiePath()).Close();
-
-				return GetInstallCookiePath();
-			}
-			else
-			{
-				return GetInstallCookiePath();
 			}
 		}
 
@@ -385,10 +441,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns>The local dir, terminated by a directory separator.</returns>
 		public static string GetLocalDir()
 		{
-			string localDir = String.Format(@"{0}{1}", 
-				                  Directory.GetCurrentDirectory(), 
-				                  Path.DirectorySeparatorChar);
-			return localDir;
+			Uri codeBaseURI = new UriBuilder(Assembly.GetExecutingAssembly().Location).Uri;
+			return Path.GetDirectoryName(Uri.UnescapeDataString(codeBaseURI.AbsolutePath)) + Path.DirectorySeparatorChar;
 		}
 
 		/// <summary>
@@ -397,9 +451,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns>A full path to the directory.</returns>
 		public static string GetTempLauncherDownloadPath()
 		{
-			return String.Format(@"{0}{1}launchpad{1}launcher", 
-				Path.GetTempPath(), 
-				Path.DirectorySeparatorChar);
+			return $@"{Path.GetTempPath()}{Path.DirectorySeparatorChar}launchpad{Path.DirectorySeparatorChar}launcher";
 		}
 
 		/// <summary>
@@ -408,10 +460,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns>The game path, terminated by a directory separator.</returns>
 		public string GetGamePath()
 		{
-			return String.Format(@"{0}Game{2}{1}{2}", 
-				GetLocalDir(),
-				GetSystemTarget(),
-				Path.DirectorySeparatorChar);
+			return $@"{GetLocalDir()}Game{Path.DirectorySeparatorChar}{GetSystemTarget()}{Path.DirectorySeparatorChar}";
 		}
 
 		/// <summary>
@@ -423,34 +472,30 @@ namespace Launchpad.Launcher.Handlers
 			string executablePathRootLevel;
 			string executablePathTargetLevel;
 
+			// While not recommended nor supported, the user may add an executable extension to the executable name.
+			// We strip it out here (if it exists) just to be safe.
+			string executableName = GetMainExecutableName().Replace(".exe", "");
+
 			//unix doesn't need (or have!) the .exe extension.
 			if (ChecksHandler.IsRunningOnUnix())
 			{
 				//should return something along the lines of "./Game/<ExecutableName>"
-				executablePathRootLevel = String.Format(@"{0}{1}", 
-					GetGamePath(), 
-					GetGameName());
+				executablePathRootLevel = $@"{GetGamePath()}{executableName}";
 
 				//should return something along the lines of "./Game/<GameName>/Binaries/<SystemTarget>/<ExecutableName>"
-				executablePathTargetLevel = String.Format(@"{0}{1}{3}Binaries{3}{2}{3}{1}", 
-					GetGamePath(), 
-					GetGameName(), 
-					GetSystemTarget(),
-					Path.DirectorySeparatorChar);
+				executablePathTargetLevel =
+					$@"{GetGamePath()}{GetGameName()}{Path.DirectorySeparatorChar}Binaries" +
+					$"{Path.DirectorySeparatorChar}{GetSystemTarget()}{Path.DirectorySeparatorChar}{executableName}";
 			}
 			else
 			{
 				//should return something along the lines of "./Game/<ExecutableName>.exe"
-				executablePathRootLevel = String.Format(@"{0}{1}.exe", 
-					GetGamePath(), 
-					GetGameName());
+				executablePathRootLevel = $@"{GetGamePath()}{executableName}.exe";
 
 				//should return something along the lines of "./Game/<GameName>/Binaries/<SystemTarget>/<ExecutableName>.exe"
-				executablePathTargetLevel = String.Format(@"{0}{1}{3}Binaries{3}{2}{3}{1}.exe", 
-					GetGamePath(), 
-					GetGameName(), 
-					GetSystemTarget(),
-					Path.DirectorySeparatorChar);
+				executablePathTargetLevel =
+					$@"{GetGamePath()}{GetGameName()}{Path.DirectorySeparatorChar}Binaries" +
+					$"{Path.DirectorySeparatorChar}{GetSystemTarget()}{Path.DirectorySeparatorChar}{executableName}.exe";
 			}
 
 
@@ -458,16 +503,18 @@ namespace Launchpad.Launcher.Handlers
 			{
 				return executablePathRootLevel;
 			}
-			else if (File.Exists(executablePathTargetLevel))
+
+			if (File.Exists(executablePathTargetLevel))
 			{
 				return executablePathTargetLevel;
 			}
-			else
-			{
-				Console.WriteLine("Searched at: " + executablePathRootLevel);
-				Console.WriteLine("Searched at: " + executablePathTargetLevel);
-				throw new FileNotFoundException("The game executable could not be found.");
-			}
+
+			Log.Warn("Could not find the game executable. " +
+				"\n\tSearched at : " + executablePathRootLevel +
+				"\n\t Searched at: " + executablePathTargetLevel);
+
+			throw new FileNotFoundException("The game executable could not be found.");
+
 		}
 
 		/// <summary>
@@ -476,27 +523,26 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns>The local game version.</returns>
 		public Version GetLocalGameVersion()
 		{
-			string rawGameVersion = String.Empty;
-			Version gameVersion = null;
 			try
 			{
-				rawGameVersion = File.ReadAllText(GetGameVersionPath());
+				Version gameVersion;
+				string rawGameVersion = File.ReadAllText(GetGameVersionPath());
+
+				if (Version.TryParse(rawGameVersion, out gameVersion))
+				{
+					return gameVersion;
+				}
+				else
+				{
+					Log.Warn("Could not parse local game version. Contents: " + rawGameVersion);
+					return new Version("0.0.0");
+				}
 			}
 			catch (IOException ioex)
 			{
-				Console.WriteLine("IOException in GetLocalGameVersion(): " + ioex.Message);
+				Log.Warn("Could not read local game version (IOException): " + ioex.Message);
+				return null;
 			}
-
-			try
-			{
-				gameVersion = Version.Parse(rawGameVersion);
-			}
-			catch (ArgumentException aex)
-			{
-				Console.WriteLine("ArgumentException in GetLocalGameVersion(): " + aex.Message);
-			}
-
-			return gameVersion;
 		}
 
 		/// <summary>
@@ -505,8 +551,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns>The game version path.</returns>
 		public string GetGameVersionPath()
 		{
-			string localVersionPath = String.Format(@"{0}GameVersion.txt",
-				                          GetGamePath());
+			string localVersionPath = $@"{GetGamePath()}GameVersion.txt";
 
 			return localVersionPath;
 		}
@@ -520,13 +565,11 @@ namespace Launchpad.Launcher.Handlers
 			string launcherURL;
 			if (GetDoOfficialUpdates())
 			{
-				launcherURL = String.Format("{0}/launcher/bin/", 
-					GetOfficialBaseProtocolURL());
+				launcherURL = $"{GetOfficialBaseProtocolURL()}/launcher/bin/";
 			}
 			else
 			{
-				launcherURL = String.Format("{0}/launcher/bin/", 
-					GetBaseProtocolURL());
+				launcherURL = $"{GetBaseProtocolURL()}/launcher/bin/";
 			}
 
 			return launcherURL;
@@ -535,20 +578,18 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// Gets the launcher version URL.
 		/// </summary>
-		/// <returns>The launcher version URL to either the official launchpad 
+		/// <returns>The launcher version URL to either the official launchpad
 		/// binaries or a custom launcher, depending on the settings.</returns>
 		public string GetLauncherVersionURL()
 		{
 			string versionURL;
 			if (GetDoOfficialUpdates())
 			{
-				versionURL = String.Format("{0}/launcher/LauncherVersion.txt", 
-					GetOfficialBaseProtocolURL());
+				versionURL = $"{GetOfficialBaseProtocolURL()}/launcher/LauncherVersion.txt";
 			}
 			else
 			{
-				versionURL = String.Format("{0}/launcher/LauncherVersion.txt", 
-					GetBaseProtocolURL());
+				versionURL = $"{GetBaseProtocolURL()}/launcher/LauncherVersion.txt";
 			}
 
 			return versionURL;
@@ -560,9 +601,7 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns>The game URL.</returns>
 		public string GetGameURL()
 		{
-			return String.Format("{0}/game/{1}/bin/", 
-				GetBaseProtocolURL(), 
-				GetSystemTarget());
+			return $"{GetBaseProtocolURL()}/game/{GetSystemTarget()}/bin/";
 		}
 
 		/// <summary>
@@ -575,25 +614,20 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string changelogURL = data["Remote"]["ChangelogURL"];
+					string changelogURL = data[SectionNameRemote][RemoteChangelogURLKey];
 
 					return changelogURL;
 
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetChangelogURL(): " + ioex.Message);
+					Log.Warn("Could not read changelog URL (IOException): " + ioex.Message);
 					return null;
 				}
-				catch (ArgumentException aex)
-				{
-					Console.WriteLine("ArgumentException in GetChangelogURL(): " + aex.Message);
-					return null;
-				}
-			} 
+			}
 		}
 
 		/// <summary>
@@ -606,25 +640,28 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string launcherVersion = data["Local"]["LauncherVersion"];
+					string launcherVersion = data[SectionNameLocal][LocalVersionKey];
 
-					return Version.Parse(launcherVersion);
-
+					Version localLauncherVersion;
+					if (Version.TryParse(launcherVersion, out localLauncherVersion))
+					{
+						return localLauncherVersion;
+					}
+					else
+					{
+						Log.Warn("Failed to parse local launcher version. Returning default version of 0.0.0.");
+						return new Version("0.0.0");
+					}
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetLauncherVersion(): " + ioex.Message);
+					Log.Warn("Could not read local launcher version (IOException): " + ioex.Message);
 					return null;
 				}
-				catch (ArgumentException aex)
-				{
-					Console.WriteLine("ArgumentException in GetLauncherVersion(): " + aex.Message);
-					return null;
-				}
-			}            
+			}
 		}
 
 		/// <summary>
@@ -637,33 +674,21 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string gameName = data["Local"]["GameName"];
+					string gameName = data[SectionNameLocal][LocalGameNameKey];
 
 					return gameName;
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetGameName(): " + ioex.Message);
-					return String.Empty;
+					Log.Warn("Could not get the game name (IOException): " + ioex.Message);
+					return string.Empty;
 				}
-			}            
+			}
 		}
 
-		// TODO: More dynamic loading of protocols? Maybe even a plugin system?
-		// Could use a static registry list in PatchProtocolHandler where plugin
-		// protocols register their keys and types
-		//
-		// private static readonly List<ProtocolDescriptor> AvailableProtocols = new List<ProtocolDescriptor>();
-		// ProtocolDescriptor protocol = new ProtocolDescriptor();
-		// protocol.Key = "HyperspaceRTL";
-		// protocol.Type = typeof(this);
-		//
-		// PatchProtocolHandler.RegisterProtocol(protocol);
-		// PatchProtocolHandler.UnregisterProtocol(protocol);
-		//
 		/// <summary>
 		/// Gets an instance of the desired patch protocol. Currently, FTP, HTTP and BitTorrent are supported.
 		/// </summary>
@@ -674,10 +699,10 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string patchProtocol = data["Remote"]["Protocol"];
+					string patchProtocol = data[SectionNameRemote][RemoteProtocolKey];
 
 					switch (patchProtocol)
 					{
@@ -695,18 +720,14 @@ namespace Launchpad.Launcher.Handlers
 							}
 						default:
 							{
-								throw new NotImplementedException(String.Format("Protocol \"{0}\" was not recognized or implemented.", patchProtocol));
+								Log.Error($"Failed to load protocol handler: Protocol \"{patchProtocol}\" was not recognized or implemented.");
+                                return null;
 							}
 					}
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetPatchProtocol(): " + ioex.Message);
-					return null;
-				}
-				catch (NotImplementedException nex)
-				{
-					Console.WriteLine("NotImplementedException in GetPatchProtocol(): " + nex.Message);
+					Log.Warn("Could not read desired protocol (IOException): " + ioex.Message);
 					return null;
 				}
 			}
@@ -716,20 +737,20 @@ namespace Launchpad.Launcher.Handlers
 		/// Gets the set protocol string.
 		/// </summary>
 		/// <returns>The patch protocol.</returns>
-		public string GetPatchProtocolString()
+		private string GetPatchProtocolString()
 		{
 			lock (ReadLock)
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					return data["Remote"]["Protocol"];
+					return data[SectionNameRemote][RemoteProtocolKey];
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetPatchProtocolString(): " + ioex.Message);
+					Log.Warn("Could not read the protocol string (IOException): " + ioex.Message);
 					return null;
 				}
 			}
@@ -738,8 +759,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// Sets the name of the game.
 		/// </summary>
-		/// <param name="GameName">Game name.</param>
-		public void SetGameName(string GameName)
+		/// <param name="gameName">Game name.</param>
+		public void SetGameName(string gameName)
 		{
 			lock (ReadLock)
 			{
@@ -747,16 +768,16 @@ namespace Launchpad.Launcher.Handlers
 				{
 					try
 					{
-						FileIniDataParser Parser = new FileIniDataParser();
-						IniData data = Parser.ReadFile(GetConfigPath());
+						FileIniDataParser parser = new FileIniDataParser();
+						IniData data = parser.ReadFile(GetConfigPath());
 
-						data["Local"]["GameName"] = GameName;
+						data[SectionNameLocal][LocalGameNameKey] = gameName;
 
-						WriteConfig(Parser, data);
+						WriteConfig(parser, data);
 					}
 					catch (IOException ioex)
 					{
-						Console.WriteLine("IOException in SetGameName(): " + ioex.Message);
+						Log.Warn("Could not setthe game name (IOException): " + ioex.Message);
 					}
 				}
 			}
@@ -777,31 +798,31 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string systemTarget = data["Local"]["SystemTarget"];
+					string systemTarget = data[SectionNameLocal][LocalSystemTargetKey];
 
 					return Utilities.ParseSystemTarget(systemTarget);
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetSystemTarget(): " + ioex.Message);
+					Log.Warn("Could not set the system target (IOException): " + ioex.Message);
 					return ESystemTarget.Unknown;
 				}
 				catch (ArgumentException aex)
 				{
-					Console.WriteLine("ArgumentException in GetSystemTarget(): " + aex.Message);
+					Log.Warn("Could not parse the system target (ArgumentException): " + aex.Message);
 					return ESystemTarget.Unknown;
 				}
-			}            
+			}
 		}
 
 		/// <summary>
 		/// Sets the system target.
 		/// </summary>
-		/// <param name="SystemTarget">System target.</param>
-		public void SetSystemTarget(ESystemTarget SystemTarget)
+		/// <param name="systemTarget">System target.</param>
+		public void SetSystemTarget(ESystemTarget systemTarget)
 		{
 			//possible values are:
 			//Win64
@@ -814,16 +835,16 @@ namespace Launchpad.Launcher.Handlers
 				{
 					try
 					{
-						FileIniDataParser Parser = new FileIniDataParser();
-						IniData data = Parser.ReadFile(GetConfigPath());                    
+						FileIniDataParser parser = new FileIniDataParser();
+						IniData data = parser.ReadFile(GetConfigPath());
 
-						data["Local"]["SystemTarget"] = SystemTarget.ToString();
+						data[SectionNameLocal][LocalSystemTargetKey] = systemTarget.ToString();
 
-						WriteConfig(Parser, data);
+						WriteConfig(parser, data);
 					}
 					catch (IOException ioex)
 					{
-						Console.WriteLine("IOException in SetSystemTarget(): " + ioex.Message);                  
+						Log.Warn("Could not set the system target (IOException): " + ioex.Message);
 					}
 				}
 			}
@@ -839,17 +860,17 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string remoteUsername = data["Remote"]["Username"];
+					string remoteUsername = data[SectionNameRemote][RemoteUsernameKey];
 
 					return remoteUsername;
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetRemoteUsername(): " + ioex.Message);
-					return String.Empty;
+					Log.Warn("Could not get the remote username (IOException): " + ioex.Message);
+					return string.Empty;
 				}
 			}
 		}
@@ -857,8 +878,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// Sets the username for the remote service.
 		/// </summary>
-		/// <param name="Username">The remote username..</param>
-		public void SetRemoteUsername(string Username)
+		/// <param name="username">The remote username..</param>
+		public void SetRemoteUsername(string username)
 		{
 			lock (ReadLock)
 			{
@@ -866,16 +887,16 @@ namespace Launchpad.Launcher.Handlers
 				{
 					try
 					{
-						FileIniDataParser Parser = new FileIniDataParser();
-						IniData data = Parser.ReadFile(GetConfigPath());
+						FileIniDataParser parser = new FileIniDataParser();
+						IniData data = parser.ReadFile(GetConfigPath());
 
-						data["Remote"]["Username"] = Username;
+						data[SectionNameRemote][RemoteUsernameKey] = username;
 
-						WriteConfig(Parser, data);
+						WriteConfig(parser, data);
 					}
 					catch (IOException ioex)
 					{
-						Console.WriteLine("IOException in SetRemoteUsername(): " + ioex.Message);
+						Log.Warn("Could not set the remote username (IOException): " + ioex.Message);
 					}
 				}
 			}
@@ -891,16 +912,16 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string remotePassword = data["Remote"]["Password"];
+					string remotePassword = data[SectionNameRemote][RemotePasswordKey];
 
 					return remotePassword;
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetRemotePassword(): " + ioex.Message);
+					Log.Warn("Could not get the remote password (IOException): " + ioex.Message);
 					return String.Empty;
 				}
 			}
@@ -909,8 +930,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// Sets the password for the remote service.
 		/// </summary>
-		/// <param name="Password">The remote password.</param>
-		public void SetRemotePassword(string Password)
+		/// <param name="password">The remote password.</param>
+		public void SetRemotePassword(string password)
 		{
 			lock (ReadLock)
 			{
@@ -918,16 +939,16 @@ namespace Launchpad.Launcher.Handlers
 				{
 					try
 					{
-						FileIniDataParser Parser = new FileIniDataParser();
-						IniData data = Parser.ReadFile(GetConfigPath());
+						FileIniDataParser parser = new FileIniDataParser();
+						IniData data = parser.ReadFile(GetConfigPath());
 
-						data["Remote"]["Password"] = Password;
+						data[SectionNameRemote][RemotePasswordKey] = password;
 
-						WriteConfig(Parser, data);
+						WriteConfig(parser, data);
 					}
 					catch (IOException ioex)
 					{
-						Console.WriteLine("IOException in SetRemotePassword(): " + ioex.Message);
+						Log.Warn("Could not set the remote password (IOException): " + ioex.Message);
 					}
 				}
 			}
@@ -936,17 +957,17 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// Gets the number of times the patching protocol should retry to download files.
 		/// </summary>
-		/// <returns>The number of file retries..</returns>
+		/// <returns>The number of file retries.</returns>
 		public int GetFileRetries()
 		{
 			lock (ReadLock)
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string fileRetries = data["Remote"]["FileRetries"];
+					string fileRetries = data[SectionNameRemote][RemoteFileRetriesKey];
 
 					int retries;
 					if (int.TryParse(fileRetries, out retries))
@@ -960,7 +981,7 @@ namespace Launchpad.Launcher.Handlers
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetRemotePassword(): " + ioex.Message);
+					Log.Warn("Could not get the maximum file retries (IOException): " + ioex.Message);
 					return 0;
 				}
 			}
@@ -984,12 +1005,12 @@ namespace Launchpad.Launcher.Handlers
 					}
 				default:
 					{
-						return GetBaseFTPUrl();
+						throw new ArgumentOutOfRangeException(nameof(GetPatchProtocolString), null, "Invalid protocol set in the configuration file.");
 					}
 			}
 		}
 
-		public string GetOfficialBaseProtocolURL()
+		private string GetOfficialBaseProtocolURL()
 		{
 			switch (GetPatchProtocolString())
 			{
@@ -1003,7 +1024,7 @@ namespace Launchpad.Launcher.Handlers
 					}
 				default:
 					{
-						return "ftp://directorate.asuscomm.com";
+						throw new ArgumentOutOfRangeException(nameof(GetPatchProtocolString), null, "Invalid protocol set in the configuration file.");
 					}
 			}
 		}
@@ -1018,19 +1039,19 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
+					FileIniDataParser parser = new FileIniDataParser();
 
 					string configPath = GetConfigPath();
-					IniData data = Parser.ReadFile(configPath);
+					IniData data = parser.ReadFile(configPath);
 
-					string FTPURL = data["FTP"]["URL"];
+					string url = data[SectionNameFTP][FTPAddressKey];
 
-					return FTPURL;
+					return url;
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetBaseFTPURL(): " + ioex.Message);
-					return String.Empty;
+					Log.Warn("Could not get the base FTP URL (IOException): " + ioex.Message);
+					return string.Empty;
 				}
 			}
 		}
@@ -1039,8 +1060,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// Sets the base FTP URL.
 		/// </summary>
-		/// <param name="Url">URL.</param>
-		public void SetBaseFTPUrl(string Url)
+		/// <param name="url">URL.</param>
+		public void SetBaseFTPUrl(string url)
 		{
 			lock (ReadLock)
 			{
@@ -1048,16 +1069,16 @@ namespace Launchpad.Launcher.Handlers
 				{
 					try
 					{
-						FileIniDataParser Parser = new FileIniDataParser();
-						IniData data = Parser.ReadFile(GetConfigPath());
+						FileIniDataParser parser = new FileIniDataParser();
+						IniData data = parser.ReadFile(GetConfigPath());
 
-						data["FTP"]["URL"] = Url;
+						data[SectionNameFTP][FTPAddressKey] = url;
 
-						WriteConfig(Parser, data);
+						WriteConfig(parser, data);
 					}
 					catch (IOException ioex)
 					{
-						Console.WriteLine("IOException in GetFTPPassword(): " + ioex.Message);				
+						Log.Warn("Could not set the base FTP URL (IOException): " + ioex.Message);
 					}
 				}
 			}
@@ -1073,19 +1094,19 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
+					FileIniDataParser parser = new FileIniDataParser();
 
 					string configPath = GetConfigPath();
-					IniData data = Parser.ReadFile(configPath);
+					IniData data = parser.ReadFile(configPath);
 
-					string FTPURL = data["HTTP"]["URL"];
+					string url = data[SectionNameHTTP][HTTPAddressKey];
 
-					return FTPURL;
+					return url;
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetBaseHTTPUrl(): " + ioex.Message);
-					return String.Empty;
+					Log.Warn("Could not get the base HTTP URL (IOException): " + ioex.Message);
+					return string.Empty;
 				}
 			}
 		}
@@ -1094,8 +1115,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// Sets the base HTTP URL.
 		/// </summary>
-		/// <param name="Url">The new URL.</param>
-		public void SetBaseHTTPUrl(string Url)
+		/// <param name="url">The new URL.</param>
+		public void SetBaseHTTPUrl(string url)
 		{
 			lock (ReadLock)
 			{
@@ -1103,16 +1124,16 @@ namespace Launchpad.Launcher.Handlers
 				{
 					try
 					{
-						FileIniDataParser Parser = new FileIniDataParser();
-						IniData data = Parser.ReadFile(GetConfigPath());
+						FileIniDataParser parser = new FileIniDataParser();
+						IniData data = parser.ReadFile(GetConfigPath());
 
-						data["HTTP"]["URL"] = Url;
+						data[SectionNameHTTP][HTTPAddressKey] = url;
 
-						WriteConfig(Parser, data);
+						WriteConfig(parser, data);
 					}
 					catch (IOException ioex)
 					{
-						Console.WriteLine("IOException in SetBaseHTTPUrl(): " + ioex.Message);				
+						Log.Warn("Could not set the base HTTP URL (IOException): " + ioex.Message);
 					}
 				}
 			}
@@ -1128,19 +1149,19 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
+					FileIniDataParser parser = new FileIniDataParser();
 
 					string configPath = GetConfigPath();
-					IniData data = Parser.ReadFile(configPath);
+					IniData data = parser.ReadFile(configPath);
 
-					string FTPURL = data["BitTorrent"]["Magnet"];
+					string magnetLink = data[SectionNameBitTorrent]["Magnet"];
 
-					return FTPURL;
+					return magnetLink;
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetBitTorrentMagnet(): " + ioex.Message);
-					return String.Empty;
+					Log.Warn("Could not get the BitTorrent magnet link (IOException): " + ioex.Message);
+					return string.Empty;
 				}
 			}
 		}
@@ -1149,8 +1170,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// Sets the BitTorrent magnet link.
 		/// </summary>
-		/// <param name="Magnet">The new magnet link.</param>
-		public void SetBitTorrentMagnet(string Magnet)
+		/// <param name="magnet">The new magnet link.</param>
+		public void SetBitTorrentMagnet(string magnet)
 		{
 			lock (ReadLock)
 			{
@@ -1158,16 +1179,71 @@ namespace Launchpad.Launcher.Handlers
 				{
 					try
 					{
-						FileIniDataParser Parser = new FileIniDataParser();
-						IniData data = Parser.ReadFile(GetConfigPath());
+						FileIniDataParser parser = new FileIniDataParser();
+						IniData data = parser.ReadFile(GetConfigPath());
 
-						data["BitTorrent"]["Magnet"] = Magnet;
+						data[SectionNameBitTorrent]["Magnet"] = magnet;
 
-						WriteConfig(Parser, data);
+						WriteConfig(parser, data);
 					}
 					catch (IOException ioex)
 					{
-						Console.WriteLine("IOException in SetBitTorrentMagnet(): " + ioex.Message);				
+						Log.Warn("Could not set the BitTorrent magnet link (IOException): " + ioex.Message);
+					}
+				}
+			}
+		}
+
+		/// <summary>
+		/// Gets the name of the main executable.
+		/// </summary>
+		/// <returns>The name of the main executable.</returns>
+		private string GetMainExecutableName()
+		{
+			lock (ReadLock)
+			{
+				try
+				{
+					FileIniDataParser parser = new FileIniDataParser();
+
+					string configPath = GetConfigPath();
+					IniData data = parser.ReadFile(configPath);
+
+					string mainExecutableName = data[SectionNameLocal][LocalMainExecutableNameKey];
+
+					return mainExecutableName;
+				}
+				catch (IOException ioex)
+				{
+					Log.Warn("Could not get the main executable name (IOException): " + ioex.Message);
+					return string.Empty;
+				}
+			}
+		}
+
+
+		/// <summary>
+		/// Sets the name of the main executable.
+		/// </summary>
+		/// <param name="mainExecutableName">The new main executable name.</param>
+		public void SetMainExecutableName(string mainExecutableName)
+		{
+			lock (ReadLock)
+			{
+				lock (WriteLock)
+				{
+					try
+					{
+						FileIniDataParser parser = new FileIniDataParser();
+						IniData data = parser.ReadFile(GetConfigPath());
+
+						data[SectionNameLocal][LocalMainExecutableNameKey] = mainExecutableName;
+
+						WriteConfig(parser, data);
+					}
+					catch (IOException ioex)
+					{
+						Log.Warn("Could not set the main executable name (IOException): " + ioex.Message);
 					}
 				}
 			}
@@ -1183,21 +1259,25 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string rawDoOfficialUpdates = data["Launchpad"]["bOfficialUpdates"];
+					string rawDoOfficialUpdates = data[SectionNameLaunchpad]["bOfficialUpdates"];
 
-					return bool.Parse(rawDoOfficialUpdates);
+					bool doOfficialUpdates;
+					if (bool.TryParse(rawDoOfficialUpdates, out doOfficialUpdates))
+					{
+						return doOfficialUpdates;
+					}
+					else
+					{
+						Log.Warn("Could not parse if we should use official updates. Allowing by default.");
+						return true;
+					}
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetDoOfficialUpdates(): " + ioex.Message);
-					return true;
-				}
-				catch (ArgumentException aex)
-				{
-					Console.WriteLine("ArgumentException in GetDoOfficialUpdates(): " + aex.Message);
+					Log.Warn("Could not determine if we should use official updates (IOException): " + ioex.Message);
 					return true;
 				}
 			}
@@ -1213,21 +1293,25 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string rawAllowAnonymousStats = data["Launchpad"]["bAllowAnonymousStats"];
+					string rawAllowAnonymousStats = data[SectionNameLaunchpad]["bAllowAnonymousStats"];
 
-					return bool.Parse(rawAllowAnonymousStats);
+					bool allowAnonymousStats;
+					if (bool.TryParse(rawAllowAnonymousStats, out allowAnonymousStats))
+					{
+						return allowAnonymousStats;
+					}
+					else
+					{
+						Log.Warn("Could not parse if we were allowed to send anonymous stats. Allowing by default.");
+						return true;
+					}
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetAllowAnonymousStats(): " + ioex.Message);
-					return true;
-				}
-				catch (ArgumentException aex)
-				{
-					Console.WriteLine("ArgumentException in GetAllowAnonymousStats(): " + aex.Message);
+					Log.Warn("Could not determine if we were allowed to send anonymous stats (IOException): " + ioex.Message);
 					return true;
 				}
 			}
@@ -1243,30 +1327,28 @@ namespace Launchpad.Launcher.Handlers
 			{
 				try
 				{
-					FileIniDataParser Parser = new FileIniDataParser();
-					IniData data = Parser.ReadFile(GetConfigPath());
+					FileIniDataParser parser = new FileIniDataParser();
+					IniData data = parser.ReadFile(GetConfigPath());
 
-					string guid = data["Local"]["GUID"];
+					string guid = data[SectionNameLocal][LocalGameGUIDKey];
 
 					return guid;
 				}
 				catch (IOException ioex)
 				{
-					Console.WriteLine("IOException in GetGUID(): " + ioex.Message);
-					return String.Empty;
+					Log.Warn("Could not load the game GUID (IOException): " + ioex.Message);
+					return string.Empty;
 				}
 			}
 		}
-
 
 		/// <summary>
 		/// Gets the path to the install-unique GUID.
 		/// </summary>
 		/// <returns>The install GUID path.</returns>
-		public string GetInstallGUIDPath()
+		private static string GetInstallGUIDPath()
 		{
-			return String.Format("{0}/Launchpad/.installguid", 
-				Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+			return $"{Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)}/Launchpad/.installguid";
 		}
 
 		/// <summary>
@@ -1274,7 +1356,7 @@ namespace Launchpad.Launcher.Handlers
 		/// </summary>
 		/// <returns>The install GUI.</returns>
 		public string GetInstallGUID()
-		{			
+		{
 			if (File.Exists(GetInstallGUIDPath()))
 			{
 				return File.ReadAllText(GetInstallGUIDPath());
@@ -1291,48 +1373,46 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c>, if an old config was copied over to the new format, <c>false</c> otherwise.</returns>
 		private bool UpdateOldConfig()
 		{
-			string oldConfigPath = String.Format(@"{0}config{1}launcherConfig.ini", 
-				                       GetLocalDir(), 
-				                       Path.DirectorySeparatorChar);
+			string oldConfigPath = $@"{GetLocalDir()}config{Path.DirectorySeparatorChar}launcherConfig.ini";
 
-			string oldConfigDir = String.Format(@"{0}config", GetLocalDir());
+			string oldConfigDir = $@"{GetLocalDir()}config";
 
 			if (ChecksHandler.IsRunningOnUnix())
 			{
-				//Case sensitive
-				//Is there an old config file?
+				// Case sensitive
+				// Is there an old config file?
 				if (File.Exists(oldConfigPath))
 				{
 					lock (ReadLock)
 					{
-						//Have we not already created the new config dir?
+						// Have we not already created the new config dir?
 						if (!Directory.Exists(GetConfigDir()))
 						{
-							//if not, create it.
+							// If not, create it.
 							Directory.CreateDirectory(GetConfigDir());
 
-							//Copy the old config file to the new location.
+							// Copy the old config file to the new location.
 							File.Copy(oldConfigPath, GetConfigPath());
 
-							//read our new file.
-							FileIniDataParser Parser = new FileIniDataParser();
-							IniData data = Parser.ReadFile(GetConfigPath());
+							// Read our new file.
+							FileIniDataParser parser = new FileIniDataParser();
+							IniData data = parser.ReadFile(GetConfigPath());
 
-							//replace the old invalid keys with new, updated keys.
-							string launcherVersion = data["Local"]["launcherVersion"];
-							string gameName = data["Local"]["gameName"];
-							string systemTarget = data["Local"]["systemTarget"];
+							// Replace the old invalid keys with new, updated keys.
+							string launcherVersion = data[SectionNameLocal]["launcherVersion"];
+							string gameName = data[SectionNameLocal]["gameName"];
+							string systemTarget = data[SectionNameLocal]["systemTarget"];
 
-							data["Local"].RemoveKey("launcherVersion");
-							data["Local"].RemoveKey("gameName");
-							data["Local"].RemoveKey("systemTarget");
+							data[SectionNameLocal].RemoveKey("launcherVersion");
+							data[SectionNameLocal].RemoveKey("gameName");
+							data[SectionNameLocal].RemoveKey("systemTarget");
 
-							data["Local"].AddKey("LauncherVersion", launcherVersion);
-							data["Local"].AddKey("GameName", gameName);
-							data["Local"].AddKey("SystemTarget", systemTarget);
+							data[SectionNameLocal].AddKey(LocalVersionKey, launcherVersion);
+							data[SectionNameLocal].AddKey(LocalGameNameKey, gameName);
+							data[SectionNameLocal].AddKey(LocalSystemTargetKey, systemTarget);
 
-							WriteConfig(Parser, data);
-							//We were successful, so return true.
+							WriteConfig(parser, data);
+							// We were successful, so return true.
 
 							File.Delete(oldConfigPath);
 							Directory.Delete(oldConfigDir, true);
@@ -1340,8 +1420,8 @@ namespace Launchpad.Launcher.Handlers
 						}
 						else
 						{
-							//The new config dir already exists, so we'll just toss out the old one.
-							//Delete the old config
+							// The new config dir already exists, so we'll just toss out the old one.
+							// Delete the old config
 							File.Delete(oldConfigPath);
 							Directory.Delete(oldConfigDir, true);
 							return false;
@@ -1357,28 +1437,28 @@ namespace Launchpad.Launcher.Handlers
 			{
 				lock (ReadLock)
 				{
-					//Windows is not case sensitive, so we'll use direct access without copying.
+					// Windows is not case sensitive, so we'll use direct access without copying.
 					if (File.Exists(oldConfigPath))
 					{
-						FileIniDataParser Parser = new FileIniDataParser();
-						IniData data = Parser.ReadFile(GetConfigPath());
+						FileIniDataParser parser = new FileIniDataParser();
+						IniData data = parser.ReadFile(GetConfigPath());
 
-						//replace the old invalid keys with new, updated keys.
-						string launcherVersion = data["Local"]["launcherVersion"];
-						string gameName = data["Local"]["gameName"];
-						string systemTarget = data["Local"]["systemTarget"];
+						// Replace the old invalid keys with new, updated keys.
+						string launcherVersion = data[SectionNameLocal]["launcherVersion"];
+						string gameName = data[SectionNameLocal]["gameName"];
+						string systemTarget = data[SectionNameLocal]["systemTarget"];
 
-						data["Local"].RemoveKey("launcherVersion");
-						data["Local"].RemoveKey("gameName");
-						data["Local"].RemoveKey("systemTarget");
+						data[SectionNameLocal].RemoveKey("launcherVersion");
+						data[SectionNameLocal].RemoveKey("gameName");
+						data[SectionNameLocal].RemoveKey("systemTarget");
 
-						data["Local"].AddKey("LauncherVersion", launcherVersion);
-						data["Local"].AddKey("GameName", gameName);
-						data["Local"].AddKey("SystemTarget", systemTarget);
+						data[SectionNameLocal].AddKey(LocalVersionKey, launcherVersion);
+						data[SectionNameLocal].AddKey(LocalGameNameKey, gameName);
+						data[SectionNameLocal].AddKey(LocalSystemTargetKey, systemTarget);
 
-						WriteConfig(Parser, data);
+						WriteConfig(parser, data);
 
-						//We were successful, so return true.
+						// We were successful, so return true.
 						return true;
 					}
 					else
@@ -1386,7 +1466,7 @@ namespace Launchpad.Launcher.Handlers
 						return false;
 					}
 
-				}               
+				}
 			}
 
 		}
@@ -1396,13 +1476,11 @@ namespace Launchpad.Launcher.Handlers
 		/// </summary>
 		private static void ReplaceOldUpdateCookie()
 		{
-			string oldUpdateCookiePath = String.Format(@"{0}.updatecookie",
-				                             GetLocalDir());
+			string oldUpdateCookiePath = $@"{GetLocalDir()}.updatecookie";
 
 			if (File.Exists(oldUpdateCookiePath))
 			{
-				string updateCookiePath = String.Format(@"{0}.update", 
-					                          GetLocalDir());
+				string updateCookiePath = $@"{GetLocalDir()}.update";
 
 				File.Move(oldUpdateCookiePath, updateCookiePath);
 			}
@@ -1436,7 +1514,7 @@ namespace Launchpad.Launcher.Handlers
 						else
 						{
 							return ESystemTarget.Linux;
-						}                                                               
+						}
 					}
 				case "Windows":
 					{

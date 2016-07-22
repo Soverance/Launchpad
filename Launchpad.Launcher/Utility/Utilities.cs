@@ -1,4 +1,4 @@
-//
+﻿//
 //  Utilities.cs
 //
 //  Author:
@@ -21,41 +21,50 @@
 
 using System;
 using Launchpad.Launcher.Utility.Enums;
+using log4net;
 
 namespace Launchpad.Launcher.Utility
 {
 	internal static class Utilities
 	{
 		/// <summary>
-		/// Clean the specified input from newlines and nulls (\r, \n and \0)
+		/// Logger instance for this class.
+		/// </summary>
+		private static readonly ILog Log = LogManager.GetLogger(typeof(Utilities));
+		/// <summary>
+		/// Sanitizes the input string, removing any \n, \r, or \0 characters.
 		/// </summary>
 		/// <param name="input">Input string.</param>
-		public static string Clean(string input)
+		public static string SanitizeString(string input)
 		{
-			return input.Replace("\n", String.Empty).Replace("\0", String.Empty).Replace("\r", String.Empty);
+			return input.Replace("\n", string.Empty).Replace("\0", string.Empty).Replace("\r", string.Empty);
 		}
 
 		public static ESystemTarget ParseSystemTarget(string input)
 		{
-			ESystemTarget Target = ESystemTarget.Unknown;
+			ESystemTarget systemTarget = ESystemTarget.Unknown;
+
 			try
 			{
-				Target = (ESystemTarget)Enum.Parse(typeof(ESystemTarget), input);
+				systemTarget = (ESystemTarget)Enum.Parse(typeof(ESystemTarget), input);
 			}
 			catch (ArgumentNullException anex)
-			{ 
-				Console.WriteLine("ArgumentNullException in ParseSystemTarget(): " + anex.Message);
+			{
+				Log.Warn("Failed to parse the system target from the input string (ArgumentNullException): " + anex.Message +
+					"\n\tInput: null");
 			}
 			catch (ArgumentException aex)
 			{
-				Console.WriteLine("ArgumentException in ParseSystemTarget(): " + aex.Message);
+				Log.Warn("Failed to parse the system target from the input string (ArgumentException): " + aex.Message +
+					"\n\tInput: " + input);
 			}
 			catch (OverflowException oex)
 			{
-				Console.WriteLine("OverflowException in ParseSystemTarget(): " + oex.Message);
+				Log.Warn("Failed to parse the system target from the input string (OverflowException): " + oex.Message +
+					"\n\tInput: " + input);
 			}
 
-			return Target;
+			return systemTarget;
 		}
 	}
 }

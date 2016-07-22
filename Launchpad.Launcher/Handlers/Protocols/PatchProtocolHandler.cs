@@ -21,6 +21,9 @@
 
 using System;
 using Launchpad.Launcher.Utility.Enums;
+using System.Drawing;
+using System.IO;
+using log4net;
 
 namespace Launchpad.Launcher.Handlers.Protocols
 {
@@ -36,6 +39,11 @@ namespace Launchpad.Launcher.Handlers.Protocols
 	/// </summary>
 	public abstract class PatchProtocolHandler
 	{
+		/// <summary>
+		/// Logger instance for this class.
+		/// </summary>
+		private static readonly ILog Log = LogManager.GetLogger(typeof(PatchProtocolHandler));
+
 		protected PatchProtocolHandler()
 		{
 			ModuleInstallFinishedArgs = new ModuleInstallationFinishedArgs();
@@ -55,12 +63,11 @@ namespace Launchpad.Launcher.Handlers.Protocols
 		public event ModuleInstallationFailedEventHandler ModuleInstallationFailed;
 
 		protected readonly ModuleProgressChangedArgs ModuleDownloadProgressArgs = new ModuleProgressChangedArgs();
-		protected readonly ModuleProgressChangedArgs ModuleCopyProgressArgs = new ModuleProgressChangedArgs();
 		protected readonly ModuleProgressChangedArgs ModuleVerifyProgressArgs = new ModuleProgressChangedArgs();
 		protected readonly ModuleProgressChangedArgs ModuleUpdateProgressArgs = new ModuleProgressChangedArgs();
 
-		protected ModuleInstallationFinishedArgs ModuleInstallFinishedArgs;
-		protected ModuleInstallationFailedArgs ModuleInstallFailedArgs;
+		protected readonly ModuleInstallationFinishedArgs ModuleInstallFinishedArgs;
+		protected readonly ModuleInstallationFailedArgs ModuleInstallFailedArgs;
 
 		/// <summary>
 		/// Determines whether this instance can provide patches. Checks for an active connection to the
@@ -73,7 +80,7 @@ namespace Launchpad.Launcher.Handlers.Protocols
 		/// Determines whether the protocol can provide patches and updates for the provided platform.
 		/// </summary>
 		/// <returns><c>true</c> if the platform is available; otherwise, <c>false</c>.</returns>
-		public abstract bool IsPlatformAvailable(ESystemTarget Platform);
+		public abstract bool IsPlatformAvailable(ESystemTarget platform);
 
 		/// <summary>
 		/// Determines whether this protocol can provide access to a changelog.
@@ -82,53 +89,75 @@ namespace Launchpad.Launcher.Handlers.Protocols
 		public abstract bool CanProvideChangelog();
 
 		/// <summary>
+		/// Determines whether this protocol can provide access to a banner for the game.
+		/// </summary>
+		/// <returns><c>true</c> if this instance can provide banner; otherwise, <c>false</c>.</returns>
+		public abstract bool CanProvideBanner();
+
+		/// <summary>
 		/// Gets the changelog.
 		/// </summary>
 		/// <returns>The changelog.</returns>
-		public abstract string GetChangelog();
+		public abstract string GetChangelogSource();
 
 		/// <summary>
-		/// Checks whether or not the launcher has a new patch available.
+		/// Gets the banner.
 		/// </summary>
-		/// <returns><c>true</c>, if there's a patch available, <c>false</c> otherwise.</returns>
-		public abstract bool IsLauncherOutdated();
+		/// <returns>The banner.</returns>
+		public abstract Bitmap GetBanner();
 
 		/// <summary>
-		/// Checks whether or not the game has a new patch available.
+		/// Determines whether or not the specified module is outdated.
 		/// </summary>
-		/// <returns><c>true</c>, if there's a patch available, <c>false</c> otherwise.</returns>
-		public abstract bool IsGameOutdated();
+		public abstract bool IsModuleOutdated(EModule module);
 
 		/// <summary>
 		/// Installs the game.
 		/// </summary>
-		public abstract void InstallGame();
+		public virtual void InstallGame()
+		{
+			ModuleInstallFinishedArgs.Module = EModule.Game;
+			ModuleInstallFailedArgs.Module = EModule.Game;
+
+			try
+			{
+				//create the .install file to mark that an installation has begun
+				//if it exists, do nothing.
+				ConfigHandler.CreateInstallCookie();
+
+				// Download Game
+				DownloadModule(EModule.Game);
+
+				// Verify Game
+				VerifyModule(EModule.Game);
+			}
+			catch (IOException ioex)
+			{
+				Log.Warn("Game installation failed (IOException): " + ioex.Message);
+			}
+
+			// OnModuleInstallationFinished and OnModuleInstallationFailed is in VerifyGame
+			// in order to allow it to run as a standalone action, while still keeping this functional.
+
+			// As a side effect, it is required that it is the last action to run in Install and Update,
+			// which happens to coincide with the general design.
+		}
 
 		/// <summary>
-		/// Downloads the latest version of the game.
+		/// Downloads the latest version of the specified module.
 		/// </summary>
-		protected abstract void DownloadGame();
+		protected abstract void DownloadModule(EModule module);
 
 		/// <summary>
-		/// Verifies and repairs the game files.
+		/// Updates the specified module to the latest version.
 		/// </summary>
-		public abstract void VerifyGame();
+		/// <param name="module">The module to update.</param>
+		public abstract void UpdateModule(EModule module);
 
 		/// <summary>
-		/// Updates the game to the latest version.
+		/// Verifies and repairs the files of the specified module.
 		/// </summary>
-		public abstract void UpdateGame();
-
-		/// <summary>
-		/// Downloads the latest version of the launcher.
-		/// </summary>
-		public abstract void DownloadLauncher();
-
-		/// <summary>
-		/// Verifies and repairs the launcher files.
-		/// </summary>
-		public abstract void VerifyLauncher();
-
+		public abstract void VerifyModule(EModule module);
 
 		protected void OnModuleDownloadProgressChanged()
 		{

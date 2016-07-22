@@ -19,8 +19,8 @@
 //  You should have received a copy of the GNU General Public License
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-using System;
 using System.Net;
+using log4net;
 
 namespace Launchpad.Launcher.Handlers
 {
@@ -30,34 +30,38 @@ namespace Launchpad.Launcher.Handlers
 	internal static class StatsHandler
 	{
 		/// <summary>
+		/// Logger instance for this class.
+		/// </summary>
+		private static readonly ILog Log = LogManager.GetLogger(typeof(StatsHandler));
+
+		/// <summary>
 		/// The config handler reference.
 		/// </summary>
 		private static readonly ConfigHandler Config = ConfigHandler.Instance;
 
+		private const string BASE_URL = "http://directorate.asuscomm.com/launchpad/stats.php?";
+
 		/// <summary>
 		/// Sends the usage stats to the official launchpad server.
 		/// </summary>
-		static public void SendUsageStats()
-		{			
+		public static void SendUsageStats()
+		{
 			try
 			{
-				const string baseURL = "http://directorate.asuscomm.com/launchpad/stats.php?";
-				string formattedURL = String.Format(baseURL + "guid={0}&launcherVersion={1}&gameName={2}&systemType={3}&officialUpdates={4}&installguid={5}",
-					                      Config.GetGameGUID(),
-					                      Config.GetLocalLauncherVersion(),
-					                      Config.GetGameName(),
-					                      Config.GetSystemTarget(),
-					                      Config.GetDoOfficialUpdates(),
-					                      Config.GetInstallGUID()
-				                      );
+				string formattedURL = $"{BASE_URL}guid={Config.GetGameGUID()}" +
+				                      $"&launcherVersion={Config.GetLocalLauncherVersion()}" +
+				                      $"&gameName={Config.GetGameName()}" +
+				                      $"&systemType={Config.GetSystemTarget()}" +
+				                      $"&officialUpdates={Config.GetDoOfficialUpdates()}" +
+									  $"&installguid={Config.GetInstallGUID()}";
 
 
 				WebRequest sendStatsRequest = WebRequest.Create(formattedURL);
-				sendStatsRequest.GetResponse();                            
+				sendStatsRequest.GetResponse();
 			}
 			catch (WebException wex)
 			{
-				Console.WriteLine("WebException in SendUsageStats(): " + wex.Message);
+				Log.Warn("Could not send usage stats (WebException): " + wex.Message);
 			}
 		}
 	}

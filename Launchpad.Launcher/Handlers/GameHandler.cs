@@ -23,6 +23,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
+using log4net;
 using Launchpad.Launcher.Handlers.Protocols;
 
 namespace Launchpad.Launcher.Handlers
@@ -30,16 +31,20 @@ namespace Launchpad.Launcher.Handlers
 	/// <summary>
 	///  This class has a lot of async stuff going on. It handles installing the game
 	///  and updating it when it needs to.
-	///  
+	///
 	///  The download protocol is selected based on the configuration each time this is
 	///  instantiated, and control is then handed over to whatever the protocol needs
 	///  to do.
-	/// 
+	///
 	///	 Since this class starts new threads in which it does the larger computations,
 	///	 there must be no useage of UI code in this class. Keep it clean!
 	/// </summary>
 	internal sealed class GameHandler
 	{
+		/// <summary>
+		/// Logger instance for this class.
+		/// </summary>
+		private static readonly ILog Log = LogManager.GetLogger(typeof(GameHandler));
 
 		public event ModuleInstallationProgressChangedEventHandler ProgressChanged;
 
@@ -57,9 +62,9 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// The config handler reference.
 		/// </summary>
-		private ConfigHandler Config = ConfigHandler.Instance;
+		private static readonly ConfigHandler Config = ConfigHandler.Instance;
 
-		private PatchProtocolHandler Patch;
+		private readonly PatchProtocolHandler Patch;
 
 		public GameHandler()
 		{
@@ -68,9 +73,10 @@ namespace Launchpad.Launcher.Handlers
 			{
 				Patch.ModuleDownloadProgressChanged += OnModuleInstallProgressChanged;
 				Patch.ModuleVerifyProgressChanged += OnModuleInstallProgressChanged;
+
 				Patch.ModuleInstallationFinished += OnModuleInstallationFinished;
-				Patch.ModuleInstallationFailed += OnModuleInstallationFailed;	
-			}				
+				Patch.ModuleInstallationFailed += OnModuleInstallationFailed;
+			}
 		}
 
 		/// <summary>
@@ -78,7 +84,8 @@ namespace Launchpad.Launcher.Handlers
 		/// </summary>
 		public void InstallGame()
 		{
-			Thread t = new Thread(Patch.InstallGame);
+			Log.Info($"Starting installation of game files using protocol \"{this.Patch.GetType().Name}\"");
+			Thread t = new Thread(this.Patch.InstallGame);
 			t.Start();
 		}
 
@@ -87,7 +94,8 @@ namespace Launchpad.Launcher.Handlers
 		/// </summary>
 		public void UpdateGame()
 		{
-			Thread t = new Thread(Patch.UpdateGame);
+			Log.Info($"Starting update of game files using protocol \"{this.Patch.GetType().Name}\"");
+			Thread t = new Thread(() => this.Patch.UpdateModule(EModule.Game));
 			t.Start();
 		}
 
@@ -96,11 +104,11 @@ namespace Launchpad.Launcher.Handlers
 		/// </summary>
 		public void VerifyGame()
 		{
-			Thread t = new Thread(Patch.VerifyGame);
+			Log.Info("Beginning verification of game files.");
+			Thread t = new Thread(() => this.Patch.VerifyModule(EModule.Game));
 			t.Start();
 		}
 
-		//TODO: Implement better crash or failure to launch recognition
 		/// <summary>
 		/// Launches the game.
 		/// </summary>
@@ -109,23 +117,40 @@ namespace Launchpad.Launcher.Handlers
 			//start new process of the game executable
 			try
 			{
-				ProcessStartInfo gameStartInfo = new ProcessStartInfo();
-				gameStartInfo.UseShellExecute = false;
-				gameStartInfo.FileName = Config.GetGameExecutable();
+				ProcessStartInfo gameStartInfo = new ProcessStartInfo
+				{
+					UseShellExecute = false,
+					FileName = Config.GetGameExecutable()
+				};
 				GameExitArgs.GameName = Config.GetGameName();
 
-				Process game = Process.Start(gameStartInfo);
-				game.EnableRaisingEvents = true;
+				Log.Info($"Launching game. \n\tExecutable path: {gameStartInfo.FileName}");
 
-				game.Exited += delegate
-				{					
-					GameExitArgs.ExitCode = game.ExitCode;
+				Process gameProcess = new Process
+				{
+					StartInfo = gameStartInfo,
+					EnableRaisingEvents = true
+				};
+
+				gameProcess.Exited += delegate
+				{
+					if (gameProcess.ExitCode != 0)
+					{
+						Log.Info($"The game exited with an exit code of {gameProcess.ExitCode}. " +
+						         "There may have been issues during runtime, or the game may not have started at all.");
+					}
+					GameExitArgs.ExitCode = gameProcess.ExitCode;
 					OnGameExited();
-				};					
+
+					// Manual disposing
+					gameProcess.Dispose();
+				};
+
+				gameProcess.Start();
 			}
 			catch (IOException ioex)
 			{
-				Console.WriteLine("IOException in LaunchGame(): " + ioex.Message);
+				Log.Warn($"Game launch failed (IOException): {ioex.Message}");
 				GameExitArgs.ExitCode = 1;
 
 				OnGameLaunchFailed();
@@ -133,7 +158,7 @@ namespace Launchpad.Launcher.Handlers
 		}
 
 		/// <summary>
-		/// Passes the internal event in the protocol handler to the outward-facing 
+		/// Passes the internal event in the protocol handler to the outward-facing
 		/// event.
 		/// </summary>
 		/// <param name="sender">Sender.</param>
@@ -147,7 +172,7 @@ namespace Launchpad.Launcher.Handlers
 		}
 
 		/// <summary>
-		/// Passes the internal event in the protocol handler to the outward-facing 
+		/// Passes the internal event in the protocol handler to the outward-facing
 		/// event.
 		/// </summary>
 		/// <param name="sender">Sender.</param>
@@ -161,7 +186,7 @@ namespace Launchpad.Launcher.Handlers
 		}
 
 		/// <summary>
-		/// Passes the internal event in the protocol handler to the outward-facing 
+		/// Passes the internal event in the protocol handler to the outward-facing
 		/// event.
 		/// </summary>
 		/// <param name="sender">Sender.</param>

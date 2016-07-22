@@ -21,6 +21,7 @@
 
 using System;
 using System.IO;
+using log4net;
 using Launchpad.Launcher.Utility.Enums;
 using Launchpad.Launcher.Handlers.Protocols;
 
@@ -28,7 +29,7 @@ namespace Launchpad.Launcher.Handlers
 {
 	/// <summary>
 	/// This class handles all the launcher's checks, returning bools for each function.
-	/// Since this class is meant to be used in both the Forms UI and the GTK UI, 
+	/// Since this class is meant to be used in both the Forms UI and the GTK UI,
 	/// there must be no useage of UI code in this class. Keep it clean!
 	/// </summary>
 	internal sealed class ChecksHandler
@@ -36,7 +37,12 @@ namespace Launchpad.Launcher.Handlers
 		/// <summary>
 		/// The config handler reference.
 		/// </summary>
-		readonly ConfigHandler Config = ConfigHandler.Instance;
+		private readonly ConfigHandler Configuration = ConfigHandler.Instance;
+
+		/// <summary>
+		/// Logger instance for this class.
+		/// </summary>
+		private static readonly ILog Log = LogManager.GetLogger(typeof(ChecksHandler));
 
 		/// <summary>
 		/// Determines whether this instance can connect to a patching service.
@@ -44,15 +50,9 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if this instance can connect to a patching service; otherwise, <c>false</c>.</returns>
 		public bool CanPatch()
 		{
-			PatchProtocolHandler Patch = Config.GetPatchProtocol();
-			if (Patch != null)
-			{
-				return Patch.CanPatch();
-			}
-			else
-			{
-				return false;
-			}
+			PatchProtocolHandler patchService = Configuration.GetPatchProtocol();
+
+			return patchService != null && patchService.CanPatch();
 		}
 
 		/// <summary>
@@ -61,17 +61,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if this is the first time; otherwise, <c>false</c>.</returns>
 		public static bool IsInitialStartup()
 		{
-			//we use an empty file to determine if this is the first launch or not
-			if (!File.Exists(ConfigHandler.GetUpdateCookiePath()))
-			{
-				Console.WriteLine("First time starting launcher.");
-				return true;
-			}
-			else
-			{
-				Console.WriteLine("Initial setup already complete.");
-				return false;
-			}
+			// We use an empty file to determine if this is the first launch or not
+			return !File.Exists(ConfigHandler.GetUpdateCookiePath());
 		}
 
 		/// <summary>
@@ -80,8 +71,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if this instance is running on unix; otherwise, <c>false</c>.</returns>
 		public static bool IsRunningOnUnix()
 		{
-			int p = (int)Environment.OSVersion.Platform;
-			if ((p == 4) || (p == 6) || (p == 128))
+			int platform = (int)Environment.OSVersion.Platform;
+			if ((platform == 4) || (platform == 6) || (platform == 128))
 			{
 				return true;
 			}
@@ -97,16 +88,26 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if the game is installed; otherwise, <c>false</c>.</returns>
 		public bool IsGameInstalled()
 		{
-			//Criteria for considering the game 'installed'
-			//Does the game directory exist?
-			bool bHasDirectory = Directory.Exists(Config.GetGamePath());
-			//Is there an .install file in the directory?
-			bool bHasInstallationCookie = File.Exists(ConfigHandler.GetInstallCookiePath());
-			//is there a version file?
-			bool bHasGameVersion = File.Exists(Config.GetGameVersionPath());
+			// Criteria for considering the game 'installed'
+			// Does the game directory exist?
+			bool bHasGameDirectory = Directory.Exists(Configuration.GetGamePath());
 
-			//If any of these criteria are false, the game is not considered fully installed.
-			return bHasDirectory && bHasInstallationCookie && IsInstallCookieEmpty() && bHasGameVersion;
+			// Is there an .install file in the directory?
+			bool bHasInstallationCookie = File.Exists(ConfigHandler.GetInstallCookiePath());
+
+			// Is there a version file?
+			bool bHasGameVersion = File.Exists(Configuration.GetGameVersionPath());
+
+			if (!bHasGameVersion && bHasGameDirectory)
+			{
+				Log.Warn("No GameVersion.txt file was found in the installation directory.\n" +
+				         "This may be due to a download error, or the develop may not have included one.\n" +
+				         "Without it, the game cannot be considered fully installed.\n" +
+				         "If you are the developer of this game, add one to your game files with your desired version in it.");
+			}
+
+			// If any of these criteria are false, the game is not considered fully installed.
+			return bHasGameDirectory && bHasInstallationCookie && IsInstallCookieEmpty() && bHasGameVersion;
 		}
 
 		/// <summary>
@@ -115,8 +116,8 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if the game is outdated; otherwise, <c>false</c>.</returns>
 		public bool IsGameOutdated()
 		{
-			PatchProtocolHandler Patch = Config.GetPatchProtocol();
-			return Patch.IsGameOutdated();
+			PatchProtocolHandler patchService = Configuration.GetPatchProtocol();
+			return patchService.IsModuleOutdated(EModule.Game);
 		}
 
 		/// <summary>
@@ -125,24 +126,25 @@ namespace Launchpad.Launcher.Handlers
 		/// <returns><c>true</c> if the launcher is outdated; otherwise, <c>false</c>.</returns>
 		public bool IsLauncherOutdated()
 		{
-			PatchProtocolHandler Patch = Config.GetPatchProtocol();
-			return Patch.IsLauncherOutdated();
+			PatchProtocolHandler patchService = Configuration.GetPatchProtocol();
+			return patchService.IsModuleOutdated(EModule.Launcher);
 		}
 
 		/// <summary>
 		/// Determines whether the install cookie is empty
 		/// </summary>
 		/// <returns><c>true</c> if the install cookie is empty, otherwise, <c>false</c>.</returns>
-		public static bool IsInstallCookieEmpty()
+		private static bool IsInstallCookieEmpty()
 		{
 			//Is there an .install file in the directory?
 			bool bHasInstallationCookie = File.Exists(ConfigHandler.GetInstallCookiePath());
+
 			//Is the .install file empty? Assume false.
 			bool bIsInstallCookieEmpty = false;
 
 			if (bHasInstallationCookie)
 			{
-				bIsInstallCookieEmpty = String.IsNullOrEmpty(File.ReadAllText(ConfigHandler.GetInstallCookiePath()));
+				bIsInstallCookieEmpty = string.IsNullOrEmpty(File.ReadAllText(ConfigHandler.GetInstallCookiePath()));
 			}
 
 			return bIsInstallCookieEmpty;
@@ -152,11 +154,11 @@ namespace Launchpad.Launcher.Handlers
 		/// Checks whether or not the server provides binaries and patches for the specified platform.
 		/// </summary>
 		/// <returns><c>true</c>, if the server does provide files for the platform, <c>false</c> otherwise.</returns>
-		/// <param name="Platform">Platform.</param>
-		public bool IsPlatformAvailable(ESystemTarget Platform)
+		/// <param name="platform">platform.</param>
+		public bool IsPlatformAvailable(ESystemTarget platform)
 		{
-			PatchProtocolHandler Patch = Config.GetPatchProtocol();
-			return Patch.IsPlatformAvailable(Platform);
+			PatchProtocolHandler patchService = Configuration.GetPatchProtocol();
+			return patchService.IsPlatformAvailable(platform);
 		}
 	}
 }

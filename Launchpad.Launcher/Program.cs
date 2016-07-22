@@ -20,43 +20,86 @@
 //  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 using System;
-using Launchpad.Launcher.UnixUI;
-using Launchpad.Launcher.WindowsUI;
+using Launchpad.Launcher.Interface;
 using Launchpad.Launcher.Handlers;
 using System.IO;
-using System.Reflection;
+using log4net;
 
 [assembly: CLSCompliant(true)]
 namespace Launchpad.Launcher
 {
-	class Program
+	internal class Program
 	{
+		/// <summary>
+		/// The config handler reference.
+		/// </summary>
+		private static readonly ConfigHandler Config = ConfigHandler.Instance;
+
+		/// <summary>
+		/// Logger instance for this class.
+		/// </summary>
+		private static readonly ILog Log = LogManager.GetLogger(typeof(Program));
+
 		/// <summary>
 		/// The main entry point for the application.
 		/// </summary>
 		[STAThread]
-		static void Main()
+		private static void Main()
 		{
+			// Bind any unhandled exceptions in the main thread so that they are logged.
+			AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
+
+			Log.Info("----------------");
+			Log.Info($"Launchpad v{Config.GetLocalLauncherVersion()} starting...");
+			Log.Info($"Current platform: {ConfigHandler.GetCurrentPlatform()} ({(Environment.Is64BitOperatingSystem ? "x64" : "x86")})");
+
 			// Set correct working directory for compatibility with double-clicking
-			Directory.SetCurrentDirectory(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location));
+			Directory.SetCurrentDirectory(ConfigHandler.GetLocalDir());
 
-			if (ChecksHandler.IsRunningOnUnix())
-			{
-				// run a GTK UI instead of WinForms
-				Gtk.Application.Init();
+			Log.Info("Initializing UI...");
 
-				MainWindow win = new MainWindow();
-				win.Show();
-				Gtk.Application.Run();
-			}
-			else
+			// Bind any unhandled exceptions in the GTK UI so that they are logged.
+			GLib.ExceptionManager.UnhandledException += OnGLibUnhandledException;
+
+			// Run the GTK UI
+			Gtk.Application.Init();
+			MainWindow win = new MainWindow();
+			win.Show();
+			Gtk.Application.Run();
+		}
+
+		/// <summary>
+		/// Passes any unhandled exceptions from the GTK UI to the generic handler.
+		/// </summary>
+		/// <param name="args">The event object containing the information about the exception.</param>
+		private static void OnGLibUnhandledException(GLib.UnhandledExceptionArgs args)
+		{
+			OnUnhandledException(null, args);
+		}
+
+		/// <summary>
+		///	Event handler for all unhandled exceptions that may be encountered during runtime. While there should never
+		/// be any unhandled exceptions in an ideal program, unexpected issues can and will arise. This handler logs
+		/// the exception and all relevant information to a logfile and prints it to the console for debugging purposes.
+		/// </summary>
+		/// <param name="sender">The sending object.</param>
+		/// <param name="unhandledExceptionEventArgs">The event object containing the information about the exception.</param>
+		private static void OnUnhandledException(object sender, UnhandledExceptionEventArgs unhandledExceptionEventArgs)
+		{
+			Log.Fatal("----------------");
+			Log.Fatal("FATAL UNHANDLED EXCEPTION!");
+			Log.Fatal("Something has gone terribly, terribly wrong during runtime.");
+			Log.Fatal("The following is what information could be gathered by the program before crashing.");
+			Log.Fatal("Please report this to <jarl.gullberg@gmail.com> or via GitHub. Include the full log and a " +
+			          "description of what you were doing when it happened.");
+
+			Exception unhandledException = unhandledExceptionEventArgs.ExceptionObject as Exception;
+			if (unhandledException != null)
 			{
-				// run a WinForms UI instead of GTK
-				System.Windows.Forms.Application.EnableVisualStyles();
-				System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
-				System.Windows.Forms.Application.Run(new MainForm());
+				Log.Fatal("Exception type: " + unhandledException.GetType().FullName);
+				Log.Fatal("Exception Message: " + unhandledException.Message);
+				Log.Fatal("Exception Stacktrace: " + unhandledException.StackTrace);
 			}
-            
 		}
 	}
 }

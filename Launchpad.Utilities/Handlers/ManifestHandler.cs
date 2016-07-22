@@ -33,74 +33,53 @@ namespace Launchpad.Utilities.Handlers
 		public event ManifestGenerationProgressChangedEventHandler ManifestGenerationProgressChanged;
 		public event ManifestGenerationFinishedEventHandler ManifestGenerationFinished;
 
-		ManifestGenerationProgressChangedEventArgs ProgressArgs = new ManifestGenerationProgressChangedEventArgs();
-
-		private string TargetPath;
-		EManifestType ManifestType;
+		private readonly ManifestGenerationProgressChangedEventArgs GenerationProgressArgs = new ManifestGenerationProgressChangedEventArgs();
 
 		/// <summary>
 		/// Generates a manifest containing the relative path, MD5 hash and file size from
 		/// all files in the provided root path.
 		/// </summary>
-		/// <param name="rootPath">The root path of the directory the manifest should represent.</param>
-		/// <param name="InManifestType">The type of manifest that should be generated.</param>
-		public void GenerateManifest(string rootPath, EManifestType InManifestType)
-		{			
-			TargetPath = rootPath;
-			ManifestType = InManifestType;
-
-			Thread t = new Thread(GenerateManifest_Implementation);
+		/// <param name="targetPath">The root path of the directory the manifest should represent.</param>
+		/// <param name="manifestType">The type of manifest that should be generated.</param>
+		public void GenerateManifest(string targetPath, EManifestType manifestType)
+		{
+			Thread t = new Thread(() => GenerateManifest_Implementation(targetPath, manifestType));
 			t.Start();
 		}
 
 		/// <summary>
 		/// The asynchronous implementation of the GenerateManifest function.
 		/// </summary>
-		private void GenerateManifest_Implementation()
+		/// <param name="targetPath">The root path of the directory the manifest should represent.</param>
+        /// <param name="manifestType">The type of manifest that should be generated.</param>
+		private void GenerateManifest_Implementation(string targetPath, EManifestType manifestType)
 		{
-			string parentDirectory = Directory.GetParent(TargetPath).ToString();
-			string manifestPath = String.Format(@"{0}{1}{2}Manifest.txt", parentDirectory, Path.DirectorySeparatorChar, ManifestType);
-			string manifestChecksumPath = String.Format(@"{0}{1}{2}Manifest.checksum", parentDirectory, Path.DirectorySeparatorChar, ManifestType);
+			string parentDirectory = Directory.GetParent(targetPath).ToString();
+			string manifestPath = $@"{parentDirectory}{Path.DirectorySeparatorChar}{manifestType}Manifest.txt";
+			string manifestChecksumPath = $@"{parentDirectory}{Path.DirectorySeparatorChar}{manifestType}Manifest.checksum";
 
-			List<string> Files = new List<string>(Directory
-				.EnumerateFiles(TargetPath, "*", SearchOption.AllDirectories)
-				.Where(s => !s.EndsWith(".install") && !s.EndsWith(".update")));
+			List<string> manifestFilePaths = new List<string>(Directory
+				.EnumerateFiles(targetPath, "*", SearchOption.AllDirectories)
+				.Where(s => !IsPathABlacklistedFile(s)));
 
 			using (TextWriter tw = new StreamWriter(File.Create(manifestPath)))
 			{
 				int completedFiles = 0;
-				foreach (string file in Files)
-				{			
-					// Calculate the MD5 hash of the file
-					string hash;
-					using (FileStream fileStream = File.OpenRead(file))
-					{
-						hash = MD5Handler.GetStreamHash(fileStream);
-					}
+				foreach (string filePath in manifestFilePaths)
+				{
+					ManifestEntry newEntry = CreateEntryForFile(targetPath, filePath);
 
-					// Get the file size on disk
-					FileInfo Info = new FileInfo(file);
-					long fileSize = Info.Length;
-
-					// Get the relative path of the file
-					string relativeFilePath = file.Substring(TargetPath.Length);
-
-					// Write the entry to the manifest
-					ManifestEntry Entry = new ManifestEntry();
-					Entry.RelativePath = relativeFilePath;
-					Entry.Hash = hash;
-					Entry.Size = fileSize;
-
-					tw.WriteLine(Entry);
+					tw.WriteLine(newEntry);
+					tw.Flush();
 
 					completedFiles++;
 
-					ProgressArgs.Filepath = relativeFilePath;
-					ProgressArgs.TotalFiles = Files.Count;
-					ProgressArgs.CompletedFiles = completedFiles;
-					ProgressArgs.MD5 = hash;
-					ProgressArgs.Filesize = fileSize;
-					OnManifestGenerationProgressChanged();					
+					GenerationProgressArgs.TotalFiles = manifestFilePaths.Count;
+					GenerationProgressArgs.CompletedFiles = completedFiles;
+					GenerationProgressArgs.Filepath = newEntry.RelativePath;
+					GenerationProgressArgs.Hash = newEntry.Hash;
+					GenerationProgressArgs.Filesize = newEntry.Size;
+					OnManifestGenerationProgressChanged();
 				}
 			}
 
@@ -122,20 +101,49 @@ namespace Launchpad.Utilities.Handlers
 			OnManifestGenerationFinished();
 		}
 
+		private static ManifestEntry CreateEntryForFile(string parentDirectory, string filePath)
+		{
+			string hash;
+			long fileSize;
+			using (FileStream fileStream = File.OpenRead(filePath))
+			{
+				// Calculate the hash of the file
+				hash = MD5Handler.GetStreamHash(fileStream);
+
+				// Get the disk size of the file
+				fileSize = fileStream.Length;
+			}
+
+			// Get the relative path of the file
+			string relativeFilePath = filePath.Substring(parentDirectory.Length);
+
+			// Write the entry to the manifest
+			ManifestEntry newEntry = new ManifestEntry
+			{
+				RelativePath = relativeFilePath,
+				Hash = hash,
+				Size = fileSize
+			};
+
+			return newEntry;
+		}
+
+		private static bool IsPathABlacklistedFile(string filePath)
+		{
+			return 	filePath.EndsWith(".install") ||
+			       	filePath.EndsWith(".update") ||
+			       	filePath.EndsWith("GameManifest.txt") ||
+					filePath.EndsWith("GameManifest.checksum");
+		}
+
 		private void OnManifestGenerationProgressChanged()
 		{
-			if (ManifestGenerationProgressChanged != null)
-			{
-				ManifestGenerationProgressChanged(this, ProgressArgs);
-			}	
+			ManifestGenerationProgressChanged?.Invoke(this, GenerationProgressArgs);
 		}
 
 		private void OnManifestGenerationFinished()
 		{
-			if (ManifestGenerationFinished != null)
-			{
-				ManifestGenerationFinished(this, EventArgs.Empty);
-			}
+			ManifestGenerationFinished?.Invoke(this, EventArgs.Empty);
 		}
 	}
 
@@ -144,6 +152,7 @@ namespace Launchpad.Utilities.Handlers
 	/// </summary>
 	public enum EManifestType : byte
 	{
+		Unknown,
 		Launchpad,
 		Game
 	}
@@ -175,8 +184,8 @@ namespace Launchpad.Utilities.Handlers
 
 		public ManifestEntry()
 		{
-			RelativePath = String.Empty;
-			Hash = String.Empty;
+			RelativePath = string.Empty;
+			Hash = string.Empty;
 			Size = 0;
 		}
 
@@ -189,22 +198,22 @@ namespace Launchpad.Utilities.Handlers
 		/// <param name="inEntry">The resulting entry.</param>
 		public static bool TryParse(string rawInput, out ManifestEntry inEntry)
 		{
-			//clear out the entry for the new data
+			// Clear out the entry for the new data
 			inEntry = new ManifestEntry();
 
-			if (!String.IsNullOrEmpty(rawInput))
+			if (!string.IsNullOrEmpty(rawInput))
 			{
-				//remove any and all bad characters from the input string, 
-				//such as \0, \n and \r.
-				string cleanInput = CleanInput(rawInput);
+				// Remove any and all bad characters from the input string,
+				// such as \0, \n and \r.
+				string cleanInput = SanitizeString(rawInput);
 
-				//split the string into its three components - file, hash and size
+				// Split the string into its three components - file, hash and size
 				string[] entryElements = cleanInput.Split(':');
 
-				//if we have three elements (which we should always have), set them in the provided entry
+				// If we have three elements (which we should always have), set them in the provided entry
 				if (entryElements.Length == 3)
 				{
-					//clean the manifest path, converting \ to / on unix and / to \ on Windows.
+					// Normalize the manifest path, converting \ to / on unix and / to \ on Windows.
 					if (ChecksHandler.IsRunningOnUnix())
 					{
 						inEntry.RelativePath = entryElements[0].Replace("\\", "/");
@@ -214,42 +223,32 @@ namespace Launchpad.Utilities.Handlers
 						inEntry.RelativePath = entryElements[0].Replace("/", "\\");
 					}
 
-					//set the hash to the second element
+					// Set the hash to the second element
 					inEntry.Hash = entryElements[1];
 
-					//attempt to parse the final element as a long-type byte count.
+					// Attempt to parse the final element as a long-type byte count.
 					long parsedSize;
-					if (long.TryParse(entryElements[2], out parsedSize))
+					if (!long.TryParse(entryElements[2], out parsedSize))
 					{
-						inEntry.Size = parsedSize;
-						return true;
-					}
-					else
-					{
-						//could not parse the size, parsing has failed.
+						// Oops. The parsing failed, so this entry is invalid.
 						return false;
 					}
-				}
-				else
-				{
-					//wrong number of raw entry elements, parsing has failed.
-					return false;
+
+					inEntry.Size = parsedSize;
+					return true;
 				}
 			}
-			else
-			{
-				//no input, parsing has failed
-				return false;
-			}
+
+			return false;
 		}
 
 		/// <summary>
 		/// Clean the specified input from newlines and nulls (\r, \n and \0)
 		/// </summary>
 		/// <param name="input">Input string.</param>
-		private static string CleanInput(string input)
+		private static string SanitizeString(string input)
 		{
-			return input.Replace("\n", String.Empty).Replace("\0", String.Empty).Replace("\r", String.Empty);
+			return input.Replace("\n", string.Empty).Replace("\0", string.Empty).Replace("\r", string.Empty);
 		}
 
 		/// <summary>
@@ -263,11 +262,11 @@ namespace Launchpad.Utilities.Handlers
 			return RelativePath + ":" + Hash + ":" + Size;
 		}
 
-		public bool Equals(ManifestEntry Other)
+		public bool Equals(ManifestEntry other)
 		{
-			return this.RelativePath == Other.RelativePath &&
-			this.Hash == Other.Hash &&
-			this.Size == Other.Size;
+			return this.RelativePath == other.RelativePath &&
+			this.Hash == other.Hash &&
+			this.Size == other.Size;
 		}
 	}
 }
